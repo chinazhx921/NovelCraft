@@ -276,13 +276,27 @@ npm run dev
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 shadow-sm space-y-3">
-              <h3 className="font-bold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
-                <Cloud className="w-4 h-4 text-amber-600" />
-                Vercel / Zeabur / Railway 部署
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                  <Cloud className="w-4 h-4 text-amber-600" />
+                  Vercel 部署 (Serverless 全栈)
+                </h3>
+                <span className="text-[11px] bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded font-medium">
+                  推荐 · 零运维
+                </span>
+              </div>
               <p className="text-xs text-stone-600 dark:text-stone-400 leading-relaxed">
-                把代码推送到 GitHub 后，在 Railway / Zeabur / Render 点击 "Import from GitHub"，直接选定该仓库，平台会自动执行 <code className="font-mono bg-stone-100 dark:bg-stone-800 px-1 py-0.5 rounded">npm run build</code> 与启动，并分配免费 HTTPS 域名！
+                代码中已内置配置好 <code className="font-mono bg-stone-100 dark:bg-stone-800 px-1 py-0.5 rounded text-amber-600">vercel.json</code> 与 <code className="font-mono bg-stone-100 dark:bg-stone-800 px-1 py-0.5 rounded text-amber-600">/api/index.ts</code> Serverless 入口：
               </p>
+              <ol className="text-xs text-stone-600 dark:text-stone-400 space-y-1.5 list-decimal list-inside">
+                <li>访问 <a href="https://vercel.com/new" target="_blank" rel="noreferrer" className="text-amber-600 underline">vercel.com/new</a>，授权登录 GitHub。</li>
+                <li>找到您的 NovelCraft 仓库，点击 <strong>Import</strong>。</li>
+                <li><strong>Framework Preset</strong> 保持选择 <strong>Vite</strong>。</li>
+                <li><strong>Build Command</strong> 确认为 <code className="font-mono bg-stone-100 dark:bg-stone-800 px-1 rounded">npm run build</code>。</li>
+                <li><strong>Output Directory</strong> 确认为 <code className="font-mono bg-stone-100 dark:bg-stone-800 px-1 rounded">dist</code>。</li>
+                <li>在 <strong>Environment Variables</strong> 填入 <code className="font-mono bg-stone-100 dark:bg-stone-800 px-1 rounded">GEMINI_API_KEY</code>（可选）。</li>
+                <li>点击 <strong>Deploy</strong>，1 分钟内即可获得免费分配的全球 CDN HTTPS 域名！</li>
+              </ol>
             </div>
 
             <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 shadow-sm space-y-3">
