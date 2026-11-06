@@ -1,0 +1,6 @@
+{
+  "name": "NovelCraft - 全网小说聚合爬虫与TXT下载器",
+  "description": "支持全网多书源智能聚合搜索、精准章节爬取、正文智能净化与排版，支持一键批量下载为TXT格式并提供沉浸式网页阅读与GitHub开源部署支持。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
