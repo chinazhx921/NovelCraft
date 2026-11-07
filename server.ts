@@ -236,6 +236,150 @@ function formatNovelText(rawText: string): string {
     .join('\n\n');
 }
 
+// Helper: Convert string to GBK URL encoding (e.g. %B6%B7%C2%DE%B4%F3%C2%BD)
+function encodeToGbk(str: string): string {
+  try {
+    const gbkBuf = iconv.encode(str, 'gbk');
+    return Array.from(gbkBuf)
+      .map((b) => '%' + b.toString(16).toUpperCase())
+      .join('');
+  } catch {
+    return encodeURIComponent(str);
+  }
+}
+
+// Scrape live search results from ptwxz (飘天文学)
+async function searchPtwxz(keyword: string): Promise<any[]> {
+  try {
+    const gbkQuery = encodeToGbk(keyword);
+    const searchUrl = `https://www.ptwxz.com/modules/article/search.php?searchtype=articlename&searchkey=${gbkQuery}`;
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 6000);
+    const $ = cheerio.load(html);
+    const results: any[] = [];
+
+    // Case 1: Exact single match redirects directly to bookinfo
+    if (finalUrl.includes('/bookinfo/')) {
+      const title = $('h1').first().text().trim() || $('title').text().split(',')[0].trim();
+      let author = $('td:contains("作 者"), td:contains("作者")').first().text().replace(/.*作\s*者[：:]/g, '').split(/\s+/)[0].trim() || '网络作者';
+      const intro = $('td:contains("内容简介")').next().text().trim() || $('#intro').text().trim() || `飘天文学收录小说《${title}》`;
+      const catalogUrl = finalUrl.replace('/bookinfo/', '/html/').replace('.html', '/index.html');
+      let cover = $('img[src*="/files/article/image/"]').attr('src') || '';
+      if (cover && !cover.startsWith('http')) cover = new URL(cover, finalUrl).toString();
+
+      if (title && !title.includes('搜索结果')) {
+        results.push({
+          id: 'ptwxz-exact-' + Math.random().toString(36).substring(2, 9),
+          title,
+          author,
+          category: '网络玄幻',
+          status: '完结/连载',
+          wordCount: '全本连载',
+          cover: cover || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          intro,
+          latestChapter: '点击查看最新章节',
+          sourceName: '飘天文学源',
+          sourceUrl: catalogUrl,
+        });
+        return results;
+      }
+    }
+
+    // Case 2: Multi-row search results table
+    $('tr').each((i, el) => {
+      if (i === 0) return;
+      const tds = $(el).find('td');
+      if (tds.length < 4) return;
+
+      const titleA = tds.eq(0).find('a').first();
+      const title = titleA.text().trim();
+      const latestA = tds.eq(1).find('a').first();
+      const latest = latestA.text().trim();
+      let catalogUrl = latestA.attr('href') || titleA.attr('href') || '';
+      const author = tds.eq(2).text().trim() || '网络作家';
+      const wordCount = tds.eq(3).text().trim();
+      const status = tds.eq(5).text().trim() || '连载';
+
+      if (title && catalogUrl && !/查看全部章节|精华书评/.test(title)) {
+        if (!catalogUrl.startsWith('http')) {
+          catalogUrl = new URL(catalogUrl, finalUrl).toString();
+        }
+        if (catalogUrl.includes('/bookinfo/')) {
+          catalogUrl = catalogUrl.replace('/bookinfo/', '/html/').replace('.html', '/index.html');
+        }
+
+        results.push({
+          id: 'ptwxz-' + Math.random().toString(36).substring(2, 9),
+          title,
+          author,
+          category: '网络文学',
+          status: status.includes('完') ? '完结' : '连载中',
+          wordCount: wordCount ? `${wordCount}` : '更新中',
+          cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          intro: `飘天文学实时收录《${title}》，作者：${author}，最新章节：${latest}`,
+          latestChapter: latest || '查看最新章节',
+          sourceName: '飘天文学源',
+          sourceUrl: catalogUrl,
+        });
+      }
+    });
+
+    return results;
+  } catch (err: any) {
+    console.log('Search ptwxz notice:', err.message);
+    return [];
+  }
+}
+
+// Scrape live search results from biquge.tv (笔趣阁)
+async function searchBiquge(keyword: string): Promise<any[]> {
+  try {
+    const gbkQuery = encodeToGbk(keyword);
+    const searchUrl = `https://www.biquge.tv/modules/article/search.php?searchkey=${gbkQuery}`;
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 6000);
+    const $ = cheerio.load(html);
+    const results: any[] = [];
+
+    $('tr').each((i, el) => {
+      if (i === 0) return;
+      const tds = $(el).find('td');
+      if (tds.length < 4) return;
+
+      const titleA = tds.eq(0).find('a').first();
+      const title = titleA.text().trim();
+      let catalogUrl = titleA.attr('href') || '';
+      const latest = tds.eq(1).find('a').first().text().trim();
+      const author = tds.eq(2).text().trim() || '网络作者';
+      const wordCount = tds.eq(3).text().trim();
+      const status = tds.eq(5).text().trim() || '连载';
+
+      if (title && catalogUrl) {
+        if (!catalogUrl.startsWith('http')) {
+          catalogUrl = new URL(catalogUrl, finalUrl).toString();
+        }
+
+        results.push({
+          id: 'bqg-' + Math.random().toString(36).substring(2, 9),
+          title,
+          author,
+          category: '热血玄幻',
+          status: status.includes('完') ? '完结' : '连载中',
+          wordCount: wordCount ? `${wordCount}` : '更新中',
+          cover: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&q=80',
+          intro: `笔趣阁实时爬取《${title}》，作者：${author}，最新更新至：${latest}`,
+          latestChapter: latest || '查看最新章节',
+          sourceName: '笔趣阁源',
+          sourceUrl: catalogUrl,
+        });
+      }
+    });
+
+    return results;
+  } catch (err: any) {
+    console.log('Search biquge notice:', err.message);
+    return [];
+  }
+}
+
 // -------------------------------------------------------------
 // API Endpoints
 // -------------------------------------------------------------
@@ -273,45 +417,34 @@ app.get('/api/search', async (req, res) => {
 
   let crawledResults: any[] = [];
 
-  // Attempt live crawl from real novel mirror engines
+  // Concurrently scrape from ptwxz and biquge
   try {
-    // Attempt 1: Search Biquge search engine
-    const searchUrl = `https://www.bqgka.com/s?q=${encodeURIComponent(query)}`;
-    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 8000);
-    const $ = cheerio.load(html);
+    let promises: Promise<any[]>[] = [];
+    if (source === 'ptwxz') {
+      promises = [searchPtwxz(query)];
+    } else if (source === 'bqg') {
+      promises = [searchBiquge(query)];
+    } else {
+      // Aggregate: search both
+      promises = [searchPtwxz(query), searchBiquge(query)];
+    }
 
-    // Parse novel list from search results
-    $('.bookbox, .txt-list li, .so_list li, .item, .hot_sale').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('.bookname a, h4 a, .title a, dt a').first().text().trim() || $el.find('a').first().text().trim();
-      let link = $el.find('.bookname a, h4 a, .title a, dt a').first().attr('href') || $el.find('a').first().attr('href') || '';
-      const author = $el.find('.author, .author a, .s4, dd:contains("作者")').first().text().replace(/作者[：:]/g, '').trim() || '网络';
-      const intro = $el.find('.intro, .uptime, dd:contains("简介")').first().text().replace(/简介[：:]/g, '').trim() || '暂无简介';
-      const cover = $el.find('img').first().attr('src') || '';
-      const latestChapter = $el.find('.sys, .s3, .update a').first().text().trim() || '最新章节';
-
-      if (title && link) {
-        if (!link.startsWith('http')) {
-          link = new URL(link, finalUrl).toString();
-        }
-        crawledResults.push({
-          id: 'live-' + Math.random().toString(36).substring(2, 9),
-          title,
-          author,
-          category: '网络玄幻',
-          status: '连载/完结',
-          wordCount: '连载更新',
-          cover: cover.startsWith('http') ? cover : (cover ? new URL(cover, finalUrl).toString() : 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80'),
-          intro: intro || `全网抓取小说《${title}》，作者：${author}`,
-          latestChapter: latestChapter || '点击进入阅读最新章节',
-          sourceName: '笔趣阁源',
-          sourceUrl: link,
-        });
+    const settled = await Promise.allSettled(promises);
+    for (const res of settled) {
+      if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+        crawledResults.push(...res.value);
       }
-    });
-  } catch (err) {
-    // Live scrape network might be blocked or rate-limited by target domain, which is expected in sandbox
-    console.log('Live search notice:', err instanceof Error ? err.message : err);
+    }
+
+    // Fuzzy fallback: if no direct match and query is >= 4 chars, try leading keywords
+    if (crawledResults.length === 0 && query.length >= 4) {
+      const shortQuery = query.substring(0, 2);
+      const fallbackResults = await searchBiquge(shortQuery);
+      const filtered = fallbackResults.filter((b) => b.title.includes(shortQuery) || b.title.includes(query.substring(0, 3)));
+      crawledResults.push(...filtered);
+    }
+  } catch (err: any) {
+    console.log('Search aggregation notice:', err.message);
   }
 
   // If live crawl returned few/no results and AI is available or requested, use Gemini to synthesize rich novel info
@@ -432,17 +565,23 @@ app.get('/api/book-detail', async (req, res) => {
   }
 
   try {
-    const { html, finalUrl } = await fetchWithEncoding(url, 10000);
+    let targetUrl = url;
+    if (targetUrl.includes('/bookinfo/')) {
+      targetUrl = targetUrl.replace('/bookinfo/', '/html/').replace('.html', '/index.html');
+    }
+
+    const { html, finalUrl } = await fetchWithEncoding(targetUrl, 10000);
     const $ = cheerio.load(html);
 
     // Extract book title
     const title = $('h1').first().text().trim() || 
                   $('.book-name, .info h1, .title, meta[property="og:novel:book_name"]').attr('content') || 
+                  $('title').text().split(/最新章节|,/)[0].trim() ||
                   '未知书名';
 
     // Extract author
     const author = $('.author, .author a, .writer, meta[property="og:novel:author"]').first().text().replace(/作者[：:]/g, '').trim() ||
-                   $('p:contains("作 者"), p:contains("作者")').first().text().replace(/作者[：:]/g, '').trim() ||
+                   $('p:contains("作 者"), p:contains("作者")').first().text().replace(/.*作\s*者[：:]/g, '').trim() ||
                    '佚名';
 
     // Extract intro
@@ -459,7 +598,7 @@ app.get('/api/book-detail', async (req, res) => {
     let idx = 1;
 
     // Common catalog containers
-    const catalogContainers = $('#list, .listmain, .book-list, #chapters, .catalog, .chapter-list, dl');
+    const catalogContainers = $('#list, .listmain, .centent, .book-list, #chapters, .catalog, .chapter-list, dl');
     const targetScope = catalogContainers.length > 0 ? catalogContainers : $('body');
 
     targetScope.find('a').each((_, el) => {
@@ -470,7 +609,7 @@ app.get('/api/book-detail', async (req, res) => {
       if (!chHref || chHref.startsWith('javascript') || chHref === '#' || chTitle.length < 2) return;
 
       // Filter out non-chapter navigation links
-      if (/首页|书架|登录|注册|留言|推荐|排行榜|下载|分类/.test(chTitle)) return;
+      if (/首页|书架|登录|注册|留言|推荐|排行榜|下载|分类|加书签|投推荐|返回书页/.test(chTitle)) return;
 
       const fullUrl = chHref.startsWith('http') ? chHref : new URL(chHref, finalUrl).toString();
       chapters.push({
@@ -566,16 +705,15 @@ app.get('/api/chapter-content', async (req, res) => {
       }
     }
 
-    if (!rawContentHtml) {
-      // Fallback: extract the body paragraph that has the longest text
-      let maxLen = 0;
-      $('div').each((_, el) => {
-        const text = $(el).text().trim();
-        if (text.length > maxLen && !$(el).find('div').length) {
-          maxLen = text.length;
-          rawContentHtml = $(el).html() || '';
-        }
-      });
+    if (!rawContentHtml || rawContentHtml.length < 100) {
+      // Specialized extraction for sites like ptwxz (where text sits in body)
+      const clone = cheerio.load(html);
+      clone('script, style, a, table, button, select, noscript, .toplink, .bottem, .read_tip, h1').remove();
+      let bodyText = clone('body').text();
+      bodyText = bodyText.replace(/选择背景颜色[^\n]*/g, '').replace(/选择字体大小[^\n]*/g, '');
+      // Split paragraphs by 4 or more spaces or \u00a0
+      bodyText = bodyText.replace(/[\u00a0\s]{4,}/g, '\n\n');
+      rawContentHtml = bodyText;
     }
 
     const cleanedContent = formatNovelText(rawContentHtml);
