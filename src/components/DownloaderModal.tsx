@@ -62,15 +62,15 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
           try {
             // Check if novel is demo preset
             let chapterText = '';
-            if (novel.id.startsWith('demo-')) {
+            if (ch.url) {
               const res = await fetch(
-                `/api/chapter-content?bookId=${encodeURIComponent(novel.id)}&chapterIndex=${ch.index}&chapterTitle=${encodeURIComponent(ch.title)}`
+                `/api/chapter-content?url=${encodeURIComponent(ch.url)}&chapterTitle=${encodeURIComponent(ch.title)}`
               );
               const data = await res.json();
               chapterText = data.content || '';
             } else {
               const res = await fetch(
-                `/api/chapter-content?url=${encodeURIComponent(ch.url)}&chapterTitle=${encodeURIComponent(ch.title)}`
+                `/api/chapter-content?bookId=${encodeURIComponent(novel.id)}&chapterIndex=${ch.index}&chapterTitle=${encodeURIComponent(ch.title)}`
               );
               const data = await res.json();
               chapterText = data.content || '';

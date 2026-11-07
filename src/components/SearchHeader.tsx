@@ -2,24 +2,24 @@ import React, { useState } from 'react';
 import { Search, Sparkles, SlidersHorizontal, Loader2, ArrowRight } from 'lucide-react';
 
 interface SearchHeaderProps {
-  onSearch: (query: string, source: string, useAi: boolean) => void;
+  onSearch: (query: string, source: string) => void;
   isLoading: boolean;
   activeSource: string;
   onSourceChange: (source: string) => void;
-  useAi: boolean;
-  onToggleAi: (val: boolean) => void;
-  hasGeminiKey: boolean;
 }
 
 const HOT_KEYWORDS = [
-  '诡秘之主',
-  '斗破苍穹',
-  '宿命之环',
-  '三体',
-  '剑来',
-  '大奉打更人',
+  '母上攻略',
+  '少妇白洁',
+  '少年阿宾',
+  '金鳞岂是池中物',
   '凡人修仙传',
-  '深空彼岸',
+  '斗破苍穹',
+  '剑来',
+  '雪中悍刀行',
+  '遮天',
+  '极品家丁',
+  '诡秘之主',
 ];
 
 export const SearchHeader: React.FC<SearchHeaderProps> = ({
@@ -27,22 +27,19 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
   isLoading,
   activeSource,
   onSourceChange,
-  useAi,
-  onToggleAi,
-  hasGeminiKey,
 }) => {
   const [keyword, setKeyword] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (keyword.trim()) {
-      onSearch(keyword.trim(), activeSource, useAi);
+      onSearch(keyword.trim(), activeSource);
     }
   };
 
   const handleHotClick = (tag: string) => {
     setKeyword(tag);
-    onSearch(tag, activeSource, useAi);
+    onSearch(tag, activeSource);
   };
 
   return (
@@ -132,25 +129,12 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
           </button>
         </div>
 
-        {/* AI Probe Toggle */}
+        {/* Verbatim Web Original Quality Badge */}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onToggleAi(!useAi)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-              useAi
-                ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300'
-                : 'border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-            <span>AI 缺失章节修复与智能重构</span>
-            <span
-              className={`w-2 h-2 rounded-full ${
-                useAi ? 'bg-amber-600' : 'bg-stone-300 dark:bg-stone-600'
-              }`}
-            />
-          </button>
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-xs font-medium">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>网络搜寻原版 · 拒绝AI补写 · 100%原文保真</span>
+          </div>
         </div>
       </div>
 

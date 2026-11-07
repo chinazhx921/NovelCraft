@@ -13,7 +13,6 @@ import {
   Type,
   Sun,
   Moon,
-  Sparkles,
 } from 'lucide-react';
 
 interface NovelReaderProps {
@@ -36,7 +35,6 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
   const [chapterContent, setChapterContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isAiRecovered, setIsAiRecovered] = useState(false);
 
   // Settings
   const [showSettings, setShowSettings] = useState(false);
@@ -77,17 +75,16 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
     const fetchContent = async () => {
       setLoading(true);
       setError(null);
-      setIsAiRecovered(false);
 
       try {
         let res;
-        if (novel.id.startsWith('demo-')) {
+        if (currentChapter.url) {
           res = await fetch(
-            `/api/chapter-content?bookId=${encodeURIComponent(novel.id)}&chapterIndex=${currentChapterIndex}&chapterTitle=${encodeURIComponent(currentChapter.title)}`
+            `/api/chapter-content?url=${encodeURIComponent(currentChapter.url)}&chapterTitle=${encodeURIComponent(currentChapter.title)}`
           );
         } else {
           res = await fetch(
-            `/api/chapter-content?url=${encodeURIComponent(currentChapter.url)}&chapterTitle=${encodeURIComponent(currentChapter.title)}`
+            `/api/chapter-content?bookId=${encodeURIComponent(novel.id)}&chapterIndex=${currentChapterIndex}&chapterTitle=${encodeURIComponent(currentChapter.title)}`
           );
         }
 
@@ -99,7 +96,6 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
         if (active) {
           setChapterTitle(data.title || currentChapter.title);
           setChapterContent(data.content || '正文暂无内容');
-          setIsAiRecovered(Boolean(data.isAiRecovered));
 
           // Save reading progress
           onSaveProgress(novel, currentChapterIndex, data.title || currentChapter.title);
@@ -356,15 +352,8 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
                 <span>{novel.title}</span>
                 <span>·</span>
                 <span>{novel.author}</span>
-                {isAiRecovered && (
-                  <>
-                    <span>·</span>
-                    <span className="flex items-center gap-1 text-amber-600 font-medium">
-                      <Sparkles className="w-3 h-3" />
-                      AI 智能重构修复
-                    </span>
-                  </>
-                )}
+                <span>·</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium">网络原版 · 原文保真</span>
               </div>
             </header>
 

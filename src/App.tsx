@@ -14,7 +14,7 @@ import { NovelReader } from './components/NovelReader';
 import { Bookshelf } from './components/Bookshelf';
 import { CustomUrlCrawler } from './components/CustomUrlCrawler';
 import { GithubDeployModal } from './components/GithubDeployModal';
-import { Loader2, BookOpen, Sparkles, AlertCircle, Compass } from 'lucide-react';
+import { Loader2, BookOpen, AlertCircle, Compass } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'search' | 'urlCrawler' | 'bookshelf' | 'deploy'>('search');
@@ -22,8 +22,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSource, setActiveSource] = useState('aggregate');
-  const [useAi, setUseAi] = useState(false);
-  const [hasGeminiKey, setHasGeminiKey] = useState(false);
 
   // Modals & Interactive Views
   const [selectedNovel, setSelectedNovel] = useState<Novel | null>(null);
@@ -65,28 +63,18 @@ export default function App() {
     }
   }, [isDark]);
 
-  // Initial load: fetch sources and pre-seeded trending novels
+  // Initial load: fetch pre-seeded trending novels
   useEffect(() => {
-    fetch('/api/sources')
-      .then((res) => res.json())
-      .then((data) => {
-        setHasGeminiKey(Boolean(data.geminiEnabled));
-        if (data.geminiEnabled) setUseAi(true);
-      })
-      .catch(() => {});
-
-    // Initial search for trending books
     fetchBooks('');
   }, []);
 
-  const fetchBooks = async (query: string, source = activeSource, aiProbe = useAi) => {
+  const fetchBooks = async (query: string, source = activeSource) => {
     setLoading(true);
     setSearchQuery(query);
     try {
       const params = new URLSearchParams();
       if (query) params.set('q', query);
       params.set('source', source);
-      if (aiProbe) params.set('ai', 'true');
 
       const res = await fetch(`/api/search?${params.toString()}`);
       if (!res.ok) throw new Error('搜索抓取失败');
@@ -191,19 +179,13 @@ export default function App() {
         {activeTab === 'search' && (
           <div>
             <SearchHeader
-              onSearch={(q, s, ai) => fetchBooks(q, s, ai)}
+              onSearch={(q, s) => fetchBooks(q, s)}
               isLoading={loading}
               activeSource={activeSource}
               onSourceChange={(s) => {
                 setActiveSource(s);
-                fetchBooks(searchQuery, s, useAi);
+                fetchBooks(searchQuery, s);
               }}
-              useAi={useAi}
-              onToggleAi={(val) => {
-                setUseAi(val);
-                if (searchQuery) fetchBooks(searchQuery, activeSource, val);
-              }}
-              hasGeminiKey={hasGeminiKey}
             />
 
             {/* Results Grid Container */}

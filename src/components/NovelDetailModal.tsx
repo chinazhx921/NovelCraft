@@ -59,9 +59,9 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
     const fetchCatalog = async () => {
       setLoading(true);
       try {
-        const queryParams = novel.id.startsWith('demo-')
-          ? `id=${encodeURIComponent(novel.id)}`
-          : `url=${encodeURIComponent(novel.sourceUrl || '')}`;
+        const queryParams = novel.sourceUrl
+          ? `url=${encodeURIComponent(novel.sourceUrl)}`
+          : `id=${encodeURIComponent(novel.id)}`;
 
         const res = await fetch(`/api/book-detail?${queryParams}`);
         if (!res.ok) {
