@@ -55,7 +55,7 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
       </div>
 
       {/* Main Search Bar Form */}
-      <form onSubmit={handleSubmit} className="relative mb-4">
+      <form onSubmit={handleSubmit} className="relative mb-3">
         <div className="relative flex items-center shadow-sm rounded-xl overflow-hidden border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 focus-within:ring-2 focus-within:ring-amber-500/50 focus-within:border-amber-500 transition-all">
           <div className="pl-4 text-stone-400">
             <Search className="w-5 h-5" />
@@ -64,7 +64,7 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
             type="text"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="输入书名、作者或关键词（例如：诡秘之主、凡人修仙传）..."
+            placeholder="输入小说名，或直接粘贴任意网页/小说网址（支持 Yandex/必应搜索到的链接）..."
             className="w-full py-3.5 pl-3 pr-28 text-stone-900 dark:text-stone-100 bg-transparent placeholder-stone-400 text-sm sm:text-base focus:outline-none"
           />
 
@@ -81,7 +81,7 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
                 </>
               ) : (
                 <>
-                  <span>搜索抓取</span>
+                  <span>{keyword.trim().startsWith('http') ? '直接转阅读' : '搜索抓取'}</span>
                   <ArrowRight className="w-4 h-4 hidden sm:inline" />
                 </>
               )}
@@ -129,9 +129,20 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
           </button>
         </div>
 
-        {/* Verbatim Web Original Quality Badge */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-xs font-medium">
+        {/* Search Engine Assistance Helper for Banned/Niche Novels */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <a
+            href={keyword.trim() ? `https://yandex.eu/search/?text=${encodeURIComponent(keyword.trim() + ' 小说 章节列表 目录')}` : 'https://yandex.eu/'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 text-xs font-medium transition-colors"
+            title="遇到冷门/敏感小说无法直接搜出时，可在 Yandex 搜索后复制网址粘贴到本站直接转阅读"
+          >
+            <span>在 Yandex.eu 搜索</span>
+            <span className="text-[10px] opacity-70">↗</span>
+          </a>
+
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-xs font-medium">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>网络搜寻原版 · 拒绝AI补写 · 100%原文保真</span>
           </div>

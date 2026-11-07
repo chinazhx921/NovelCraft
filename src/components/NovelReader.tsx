@@ -33,6 +33,7 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
   const [currentChapterIndex, setCurrentChapterIndex] = useState(initialChapterIndex);
   const [chapterTitle, setChapterTitle] = useState('');
   const [chapterContent, setChapterContent] = useState('');
+  const [subpageCount, setSubpageCount] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,6 +97,7 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
         if (active) {
           setChapterTitle(data.title || currentChapter.title);
           setChapterContent(data.content || '正文暂无内容');
+          setSubpageCount(data.subpageCount || 1);
 
           // Save reading progress
           onSaveProgress(novel, currentChapterIndex, data.title || currentChapter.title);
@@ -348,12 +350,20 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
               <h1 className={`text-2xl sm:text-3xl font-bold tracking-tight mb-2 ${fontClass}`}>
                 {chapterTitle || currentChapter.title}
               </h1>
-              <div className="text-xs opacity-60 flex items-center justify-center gap-2">
+              <div className="text-xs opacity-60 flex items-center justify-center gap-2 flex-wrap">
                 <span>{novel.title}</span>
                 <span>·</span>
                 <span>{novel.author}</span>
                 <span>·</span>
                 <span className="text-emerald-600 dark:text-emerald-400 font-medium">网络原版 · 原文保真</span>
+                {subpageCount > 1 && (
+                  <>
+                    <span>·</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-medium">
+                      已智能拼接全章共 {subpageCount} 页 · 100% 完整原版
+                    </span>
+                  </>
+                )}
               </div>
             </header>
 

@@ -79,7 +79,13 @@ export default function App() {
       const res = await fetch(`/api/search?${params.toString()}`);
       if (!res.ok) throw new Error('搜索抓取失败');
       const data = await res.json();
-      setBooks(data.books || []);
+      const list = data.books || [];
+      setBooks(list);
+
+      // If user directly pasted a URL, immediately open the novel detail/reader modal
+      if ((query.startsWith('http://') || query.startsWith('https://')) && list.length === 1) {
+        setSelectedNovel(list[0]);
+      }
     } catch (err) {
       console.error('Search error:', err);
     } finally {
