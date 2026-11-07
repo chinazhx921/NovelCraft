@@ -9,6 +9,38 @@
     <meta property="og:description" content="支持全网多书源智能聚合搜索、精准章节爬取、正文智能净化与排版，支持一键批量下载为TXT格式并提供沉浸式网页阅读与GitHub开源部署支持。" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      // Suppress cross-origin security errors injected by third-party browser extensions (e.g. video sniffers) inside iframes
+      window.addEventListener('error', function (event) {
+        var msg = (event && event.message) || '';
+        var filename = (event && event.filename) || '';
+        if (
+          filename.indexOf('chrome-extension://') !== -1 ||
+          msg.indexOf('Blocked a frame with origin') !== -1 ||
+          msg.indexOf('cross-origin frame') !== -1 ||
+          msg.indexOf('get-video-src') !== -1 ||
+          msg.indexOf('video-src-sniff') !== -1
+        ) {
+          event.stopImmediatePropagation();
+          event.preventDefault();
+          return true;
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event.reason;
+        var msg = (reason && (reason.message || reason.stack)) || '';
+        if (
+          typeof msg === 'string' &&
+          (msg.indexOf('Blocked a frame with origin') !== -1 ||
+           msg.indexOf('cross-origin frame') !== -1 ||
+           msg.indexOf('chrome-extension://') !== -1)
+        ) {
+          event.stopImmediatePropagation();
+          event.preventDefault();
+        }
+      }, true);
+    </script>
   </head>
   <body>
     <div id="root"></div>
