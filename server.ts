@@ -881,7 +881,7 @@ app.get('/api/book-detail', async (req, res) => {
 
     for (const { html: pageHtml, pageUrl } of catalogHtmlList) {
       const page$ = cheerio.load(pageHtml);
-      const catalogContainers = page$('#list, .listmain, .centent, .book-list, #chapters, .catalog, .chapter-list, dl, .layout-col1, .section-list');
+      const catalogContainers = page$('#list, .listmain, .centent, .book-list, #chapters, .catalog, .chapter-list, .chapter-list-box, .book_chapter, .volume, .chapterlist, dl, .layout-col1, .section-list');
       const targetScope = catalogContainers.length > 0 ? catalogContainers : page$('body');
 
       targetScope.find('a').each((_, el) => {
@@ -1056,7 +1056,7 @@ app.get('/api/chapter-content', async (req, res) => {
       for (const selector of candidates) {
         const match = $ctx(selector);
         if (match.length > 0 && match.text().trim().length > 60) {
-          match.find('script, style, a, button, select, noscript, .read_btn, .ad, .advertisement').remove();
+          match.find('script, style, iframe, button, select, noscript, .read_btn, .ad, .advertisement, .ads, .chapter-nav, .page-nav').remove();
           rawHtml = match.html() || '';
           break;
         }
