@@ -905,7 +905,7 @@ app.get('/api/book-detail', async (req, res) => {
           // Chapter URL must not be info, login, mybook, tag, search, list
           if (parsedUrl.pathname.includes('/info/') || parsedUrl.pathname.includes('/login') || parsedUrl.pathname.includes('/mybook') || parsedUrl.pathname.includes('/list/')) return;
           // Must have chapter-like path
-          if (!/\.html|\/read\/|\/html\//.test(parsedUrl.pathname)) return;
+          if (!/\.(?:html?|shtml?)(?:$|\/)|\/read\/|\/html\//i.test(parsedUrl.pathname) && !/[?&](?:chapter|cid|id)=\d+/i.test(parsedUrl.search)) return;
         } catch {
           return;
         }
@@ -1036,17 +1036,21 @@ app.get('/api/chapter-content', async (req, res) => {
     }
 
     const candidates = [
-      '.word_read',
+      '#nr1',
+      '.showtxt',
       '#content',
       '#chaptercontent',
-      '#htmlContent',
       '.read-content',
       '.chapter-content',
+      '[itemprop="articleBody"]',
+      'article',
+      '.word_read',
+      '#htmlContent',
       '#booktxt',
       '#txtContent',
-      '.content',
       '.read-text',
       'div[id*="content"]',
+      '.content',
     ];
 
     // Helper: Extract content from HTML string without mutating Cheerio state
