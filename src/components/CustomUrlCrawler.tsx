@@ -44,7 +44,7 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
         cover: data.book.cover || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
         intro: data.book.intro || '通过单链万能爬虫抓取解析的小说',
         sourceName: '万能单链爬虫',
-        sourceUrl: targetUrl.trim(),
+        sourceUrl: data.book.sourceUrl || targetUrl.trim(),
         chapters: data.book.chapters || [],
         totalChapters: data.book.totalChapters || 0,
       };
