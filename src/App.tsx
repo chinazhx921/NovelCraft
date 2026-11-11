@@ -257,7 +257,7 @@ export default function App() {
           <Bookshelf
             books={bookshelf}
             onSelect={(n) => setSelectedNovel(n)}
-            onRead={(n, chIdx) => setReaderState({ novel: n, chapterIndex: chIdx })}
+            onRead={(n, chIdx) => setSelectedNovel({ ...n, lastReadChapterIndex: chIdx })}
             onRemove={(id) => handleToggleBookshelf({ id } as any)}
             onExplore={() => setActiveTab('search')}
           />
