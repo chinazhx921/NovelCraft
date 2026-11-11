@@ -191,7 +191,7 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
               {/* Action shortcuts */}
               <div className="mt-3 flex flex-wrap items-center gap-2 pt-2 border-t border-stone-200/60 dark:border-stone-700/60">
                 <button
-                  onClick={() => onReadChapter({ ...novel, chapters, totalChapters: chapters.length }, 1)}
+                  onClick={() => onReadChapter({ ...novel, chapters, totalChapters: chapters.length }, novel.lastReadChapterIndex || 1)}
                   className="px-3.5 py-1.5 text-xs font-medium text-stone-800 dark:text-stone-200 bg-white dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700 border border-stone-300 dark:border-stone-600 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   <BookOpen className="w-3.5 h-3.5 text-amber-600" />
