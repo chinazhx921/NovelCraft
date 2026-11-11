@@ -232,7 +232,7 @@ export default function App() {
                       key={novel.id}
                       novel={novel}
                       onSelect={(n) => setSelectedNovel(n)}
-                      onRead={(n) => setReaderState({ novel: n, chapterIndex: 1 })}
+                      onRead={(n) => setSelectedNovel(n)}
                       onToggleBookshelf={handleToggleBookshelf}
                       isBookmarked={isBookmarked(novel)}
                     />
@@ -257,7 +257,7 @@ export default function App() {
           <Bookshelf
             books={bookshelf}
             onSelect={(n) => setSelectedNovel(n)}
-            onRead={(n, chIdx) => setReaderState({ novel: n, chapterIndex: chIdx })}
+            onRead={(n, chIdx) => setSelectedNovel({ ...n, lastReadChapterIndex: chIdx })}
             onRemove={(id) => handleToggleBookshelf({ id } as any)}
             onExplore={() => setActiveTab('search')}
           />
