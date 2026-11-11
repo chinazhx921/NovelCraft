@@ -232,7 +232,7 @@ export default function App() {
                       key={novel.id}
                       novel={novel}
                       onSelect={(n) => setSelectedNovel(n)}
-                      onRead={(n) => setReaderState({ novel: n, chapterIndex: 1 })}
+                      onRead={(n) => setSelectedNovel(n)}
                       onToggleBookshelf={handleToggleBookshelf}
                       isBookmarked={isBookmarked(novel)}
                     />
