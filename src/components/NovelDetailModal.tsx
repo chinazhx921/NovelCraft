@@ -108,7 +108,7 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
       return;
     }
 
-    onStartDownload(novel, targetList, formatOptions);
+    onStartDownload({ ...novel, chapters, totalChapters: chapters.length }, targetList, formatOptions);
   };
 
   const setQuickRange = (count: number) => {
@@ -191,7 +191,7 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
               {/* Action shortcuts */}
               <div className="mt-3 flex flex-wrap items-center gap-2 pt-2 border-t border-stone-200/60 dark:border-stone-700/60">
                 <button
-                  onClick={() => onReadChapter(novel, 1)}
+                  onClick={() => onReadChapter({ ...novel, chapters, totalChapters: chapters.length }, 1)}
                   className="px-3.5 py-1.5 text-xs font-medium text-stone-800 dark:text-stone-200 bg-white dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700 border border-stone-300 dark:border-stone-600 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   <BookOpen className="w-3.5 h-3.5 text-amber-600" />
@@ -409,7 +409,7 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
                 {displayChapters.map((chapter) => (
                   <button
                     key={chapter.index}
-                    onClick={() => onReadChapter(novel, chapter.index)}
+                    onClick={() => onReadChapter({ ...novel, chapters, totalChapters: chapters.length }, chapter.index)}
                     className="text-left px-3 py-2 rounded-lg text-xs bg-stone-50 hover:bg-amber-50 dark:bg-stone-800/40 dark:hover:bg-amber-950/30 border border-stone-200/50 dark:border-stone-700/50 text-stone-700 dark:text-stone-300 hover:text-amber-800 dark:hover:text-amber-300 transition-colors truncate group flex items-center justify-between"
                   >
                     <span className="truncate">{chapter.title}</span>
