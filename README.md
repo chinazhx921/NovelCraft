@@ -12,7 +12,7 @@ NovelCraft 基于 React 19、TypeScript、Vite 和 Express，提供多书源搜�
 
 1. 一个 Cloudflare 账号，并在账户中启用 Workers。
 2. 一个 GitHub 账号，仓库为 [chinazhx921/NovelCraft](https://github.com/chinazhx921/NovelCraft)。
-3. 本地命令行部署需要安装 Node.js 20 或更高版本（建议使用当前 LTS）和 npm。
+3. 本地命令行部署需要安装 Node.js 20.19+ 或 22.12+（建议使用当前 LTS）和 npm。
 4. （可选）Google Gemini API Key。未配置时，常规搜索、目录抓取和阅读仍可使用，Gemini 智能辅助功能不可用。
 
 ### 二、方式 A：命令行部署（推荐，步骤最明确）
