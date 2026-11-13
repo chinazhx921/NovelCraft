@@ -2,70 +2,108 @@
 
 NovelCraft 基于 React 19、TypeScript、Vite 和 Express，提供多书源搜索、目录抓取、在线阅读与 TXT 导出。
 
-## 推荐部署方式：Cloudflare Workers（免费套餐可用）
+## 推荐部署方式：通过 GitHub 关联 Cloudflare Workers 自动部署（免费套餐可用）
 
-**本项目不是纯静态网站。** 前端由 Vite 构建为 `dist/` 静态文件，搜索、目录和章节正文等功能依赖 Express `/api/*` 后端接口。只把 `dist` 上传到 Cloudflare Pages 会导致页面能打开，但搜索、目录抓取等接口不可用。
+**推荐直接在 Cloudflare 控制台关联本 GitHub 仓库。** 以后只要向 GitHub 的 `main` 分支推送代码，Cloudflare 就会自动构建并部署，不需要每次下载源码或手动上传文件。
 
-当前仓库已提供 Cloudflare Workers 入口和 Wrangler 配置：前端静态资源由 Workers Static Assets 托管，Express API 在同一个 Worker 中运行。前后端共用一个域名，无需配置 API 跨域地址。
+**重要：请选择 Cloudflare Workers 的 GitHub 集成，不要创建纯静态 Cloudflare Pages 项目。** NovelCraft 除了 React 前端，还依赖 Express `/api/*` 后端；只发布 `dist/` 静态文件会导致搜索、目录和章节接口不可用。
 
-### 一、部署前准备
+### 一、在 Cloudflare 中关联 GitHub 仓库
 
-1. 一个 Cloudflare 账号，并在账户中启用 Workers。
-2. 一个 GitHub 账号，仓库为 [chinazhx921/NovelCraft](https://github.com/chinazhx921/NovelCraft)。
-3. 本地命令行部署需要安装 Node.js 20.19+ 或 22.12+（建议使用当前 LTS）和 npm。
-4. （可选）Google Gemini API Key。未配置时，常规搜索、目录抓取和阅读仍可使用，Gemini 智能辅助功能不可用。
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
+2. 打开 **Workers & Pages**。
+3. 点击 **Create application**。
+4. 选择 **GitHub**（不要选择仅静态资源的 Pages 上传流程）。
+5. 首次连接时，按提示授权 Cloudflare Workers & Pages GitHub App。
+6. 在 GitHub 仓库列表中选择 **`chinazhx921/NovelCraft`**。
+   - 如果列表中看不到仓库，进入 GitHub → Settings → Applications → Installed GitHub Apps → Cloudflare Workers & Pages → Configure。
+   - 将 Repository access 设置为 **Only select repositories**，并勾选 `NovelCraft`；保存后返回 Cloudflare 刷新仓库列表。
+7. 选择生产分支 **`main`**，继续配置项目。
 
-### 二、方式 A：命令行部署（推荐，步骤最明确）
+### 二、构建与部署参数（请按此填写）
 
-在 Windows PowerShell、macOS Terminal 或 Linux Shell 中执行：
+仓库已包含 `wrangler.jsonc`，Cloudflare 会使用该文件中的 Worker 入口和静态资源配置。创建项目时，设置如下：
 
-```bash
-# 1. 克隆仓库
-git clone https://github.com/chinazhx921/NovelCraft.git
-cd NovelCraft
+| Cloudflare 配置项 | 填写内容 |
+|---|---|
+| Project / Worker name | `novelcraft` |
+| Git repository | `chinazhx921/NovelCraft` |
+| Production branch | `main` |
+| Root directory | `/`（仓库根目录） |
+| Build command | `npm run build` |
+| Deploy command | `npx --yes wrangler@4.68.0 deploy` |
+| Preview command（如可设置） | `npx --yes wrangler@4.68.0 versions upload` |
 
-# 2. 安装依赖
-npm install
+其他未列出的选项保持默认即可。**Worker 名称必须是 `novelcraft`**，要与仓库 `wrangler.jsonc` 中的 `name` 完全一致，否则构建部署可能失败。
 
-# 3. 登录 Cloudflare（浏览器会弹出授权页面）
-npx wrangler login
+如果控制台自动识别出框架并建议创建配置文件或修改 Wrangler 配置，请不要覆盖仓库现有的 `wrangler.jsonc`；以本仓库已经提交的 Worker 配置为准。
 
-# 4. 本地预览 Cloudflare Workers 运行环境
-npm run cf:dev
-```
+确认配置后点击 **Save and Deploy**，等待 Cloudflare 安装依赖、执行 `npm run build` 并运行 Wrangler 部署命令。
 
-本地预览启动后，按终端显示的地址打开页面。建议先测试首页、搜索、打开小说目录和阅读章节。
+### 三、查看部署结果
 
-确认正常后部署：
-
-```bash
-npm run deploy
-```
-
-该命令会先执行 `vite build` 生成前端 `dist/`，再由 Wrangler 将 Worker 与静态资源一起部署。部署成功后，终端会输出类似以下地址：
+构建成功后，在 Cloudflare **Workers & Pages → novelcraft → Deployments** 查看部署状态和访问地址。默认地址通常类似：
 
 ```text
 https://novelcraft.<你的Cloudflare账户子域名>.workers.dev
 ```
 
-直接打开该地址即可使用。
+打开该地址测试首页和 API。先访问：
 
-### 三、方式 B：Cloudflare 控制台连接 GitHub 自动部署
+```text
+https://novelcraft.<你的Cloudflare账户子域名>.workers.dev/api/health
+```
 
-如果不想每次手动执行命令，可以在 Cloudflare 控制台配置 GitHub 自动部署：
+正常时应返回：
 
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
-2. 进入 **Workers & Pages**，选择创建 Worker / 导入 Git 仓库（界面名称可能随控制台版本调整）。
-3. 选择 GitHub，并授权访问 `chinazhx921/NovelCraft`。
-4. 选择默认分支 `main`。
-5. 构建配置填写：
-   - Root directory：`/`（仓库根目录）
-   - Build command：`npm run build`
-   - Deploy command：`npx wrangler deploy`
-   - Build output directory：留空（由仓库根目录的 `wrangler.jsonc` 和 Wrangler 管理 Worker 及静态资源，不要将项目配置成纯 Pages 静态站点）
-6. 保存并启动部署。后续推送到 `main` 后，Cloudflare 会按连接配置自动构建和部署。
+```json
+{
+  "ok": true,
+  "service": "NovelCraft API"
+}
+```
 
-> 如果控制台只提供 Pages 静态站点创建流程，请不要选择仅上传 `dist` 的纯静态部署方式；本项目需要运行 Worker API。请改用 Workers 的 Git 集成或上面的 Wrangler 命令行方式。
+再在网页中依次验证小说搜索、打开小说详情并加载目录、点击章节阅读、翻页及 TXT 导出。健康接口正常只说明 Worker API 已响应；第三方小说源能否抓取还取决于源站状态和反爬策略。
+
+### 四、启用 GitHub 自动部署
+
+完成首次部署后，Cloudflare 已关联 GitHub 仓库：
+
+- 推送到 `main`：自动触发生产构建和部署。
+- 其他分支或 Pull Request：可在 Worker 的 **Settings → Builds** 中启用 Preview builds；预览构建不会替换生产版本。
+- 每次构建结果可在 Cloudflare Deployments 查看，也可查看 GitHub 对应提交或 PR 的检查状态。
+
+以后更新项目只需在 GitHub 修改并提交代码到 `main`，不需要再手动上传 `dist`，也不需要本地执行 Wrangler 部署命令。
+
+### 五、配置失败时先检查这些项目
+
+1. **Worker 名称**：Cloudflare 项目名称必须为 `novelcraft`，与 `wrangler.jsonc` 一致。
+2. **分支**：生产分支选择 `main`。
+3. **Root directory**：必须是仓库根目录 `/`，不能指向 `src` 或 `dist`。
+4. **Build command**：填写 `npm run build`。
+5. **Deploy command**：填写 `npx --yes wrangler@4.68.0 deploy`。
+6. **项目类型**：必须是 Workers 项目，不能只把 `dist` 当作静态 Pages 站点发布。
+7. **运行日志**：在 Cloudflare Worker 的 Deployments / Builds 中打开失败构建日志，确认是依赖安装、Vite 构建还是 Wrangler 部署阶段报错。
+
+### 六、命令行备用部署方式
+
+如果暂时不使用 GitHub 自动部署，也可以在本地执行：
+
+```bash
+git clone https://github.com/chinazhx921/NovelCraft.git
+cd NovelCraft
+npm install
+npx --yes wrangler@4.68.0 login
+npm run cf:dev
+```
+
+本地预览正常后执行：
+
+```bash
+npm run deploy
+```
+
+该方式需要本地安装 Node.js 20.19+ 或 22.12+。如果已关联 GitHub 自动部署，日常更新无需使用此方式。
 
 ### 四、配置 Gemini（可选）
 
