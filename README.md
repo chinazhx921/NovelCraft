@@ -32,7 +32,7 @@ NovelCraft 基于 React 19、TypeScript、Vite 和 Express，提供多书源搜�
 | Root directory | `/`（仓库根目录） |
 | Build command | `npm run build` |
 | Deploy command | `npx --yes wrangler@4.68.0 deploy` |
-| Preview command（如可设置） | `npx --yes wrangler@4.68.0 versions upload` |
+| Preview command（如可设置） | 保持 Cloudflare 默认值（`npx wrangler preview`） |
 
 其他未列出的选项保持默认即可。**Worker 名称必须是 `novelcraft`**，要与仓库 `wrangler.jsonc` 中的 `name` 完全一致，否则构建部署可能失败。
 
