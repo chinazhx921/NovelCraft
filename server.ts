@@ -1,21 +1,9 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
 import * as cheerio from 'cheerio';
 import iconv from 'iconv-lite';
-import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 
-dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -1301,31 +1289,5 @@ MIT License`;
   });
 });
 
-// Setup Vite or Static File Serving
-async function startServer() {
-  const isProd = process.env.NODE_ENV === 'production';
-
-  if (!isProd) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`NovelCraft Server running on port ${PORT}`);
-  });
-}
-
-if (!process.env.VERCEL) {
-  startServer();
-}
-
+// The Express app is exported for both the local Node.js server and Cloudflare Workers.
 export default app;
