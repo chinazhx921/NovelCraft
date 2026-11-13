@@ -4,6 +4,11 @@ import iconv from 'iconv-lite';
 import { GoogleGenAI } from '@google/genai';
 
 const app = express();
+
+// Lightweight health endpoint for Cloudflare deployment verification.
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, service: 'NovelCraft API' });
+});
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
