@@ -1,4 +1,4 @@
-name: Repair npm lockfile
+name: Repair npm lockfile and validate Cloudflare build
 
 on:
   push:
@@ -18,12 +18,25 @@ jobs:
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+
       - name: Regenerate package lock
         run: npm install --package-lock-only --ignore-scripts --include=optional --no-audit --no-fund
+
+      - name: Verify clean dependency installation
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Validate Cloudflare Worker bundle
+        run: npx --yes wrangler@4.68.0 deploy --dry-run
+
       - name: Commit updated lockfile
         run: |
           if git diff --quiet -- package-lock.json; then
