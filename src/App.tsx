@@ -82,8 +82,8 @@ export default function App() {
       const list = data.books || [];
       setBooks(list);
 
-      // If user directly pasted a URL, immediately open the novel detail/reader modal
-      if ((query.startsWith('http://') || query.startsWith('https://')) && list.length === 1) {
+      // If user directly pasted a URL (including bare domains), immediately open the novel detail/reader modal
+      if ((/^(https?:\/\/|[a-z0-9.-]+\.[a-z]{2,}\/)/i.test(query.trim()) || (list.length === 1 && (list[0] as any)?.isDirectUrl)) && list.length === 1) {
         setSelectedNovel(list[0]);
       }
     } catch (err) {

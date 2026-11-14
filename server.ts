@@ -2,6 +2,15 @@ import express from 'express';
 import * as cheerio from 'cheerio';
 import iconv from 'iconv-lite';
 import { GoogleGenAI } from '@google/genai';
+import {
+  normalizeCrawlUrl,
+  decodeHtmlBuffer,
+  formatNovelText,
+  extractChapterNumber,
+  isCatalogUpgradeLink,
+  isLikelyChapterLink,
+  isSameSiteHost,
+} from './lib/crawlerHelpers.ts';
 
 const app = express();
 
@@ -22,30 +31,57 @@ if (process.env.GEMINI_API_KEY) {
   }
 }
 
-// User-Agent rotation for scraping
+// Desktop User-Agent rotation for consistent desktop HTML scraping
 const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
 ];
 
 function getRandomUserAgent() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-// Helper: Fetch URL with automatic charset detection (UTF-8, GBK, GB2312)
-async function fetchWithEncoding(url: string, timeoutMs = 12000): Promise<{ html: string; finalUrl: string }> {
+function isBotChallengeHtml(html: string): boolean {
+  if (!html) return false;
+  return (
+    html.includes('Just a moment...') ||
+    html.includes('cf-browser-verification') ||
+    html.includes('__cf_chl_') ||
+    html.includes('Enable JavaScript and cookies to continue')
+  );
+}
+
+// Helper: Fetch URL with automatic charset detection, Referer, age-gate bypass, and HTTP fallback
+async function fetchWithEncoding(
+  rawUrl: string,
+  timeoutMs = 12000,
+  extraInit?: { method?: string; headers?: Record<string, string>; body?: string },
+  allowHttpFallback = true
+): Promise<{ html: string; finalUrl: string }> {
+  const url = normalizeCrawlUrl(rawUrl) || rawUrl;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  let origin = '';
+  try {
+    origin = new URL(url).origin + '/';
+  } catch {}
+
+  const ua = getRandomUserAgent();
+
   try {
     const res = await fetch(url, {
+      method: extraInit?.method || 'GET',
+      body: extraInit?.body,
       headers: {
-        'User-Agent': getRandomUserAgent(),
+        'User-Agent': ua,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'Cache-Control': 'no-cache',
+        ...(origin ? { Referer: origin } : {}),
+        ...(extraInit?.headers || {}),
       },
       signal: controller.signal,
     });
@@ -53,71 +89,77 @@ async function fetchWithEncoding(url: string, timeoutMs = 12000): Promise<{ html
     clearTimeout(timer);
 
     if (!res.ok) {
+      if (res.status === 403 || res.status === 503 || res.status === 520) {
+        const errBody = await res.text().catch(() => '');
+        if (isBotChallengeHtml(errBody)) {
+          throw new Error(`目标站点开启了人机验证防火墙 (HTTP ${res.status})，无法直接抓取`);
+        }
+      }
       throw new Error(`HTTP ${res.status} ${res.statusText}`);
     }
 
     const buffer = Buffer.from(await res.arrayBuffer());
-    
-    // Check Content-Type header or HTML meta tag for charset
     const contentType = res.headers.get('content-type') || '';
-    let charset = 'utf-8';
+    const html = decodeHtmlBuffer(buffer, contentType);
 
-    if (/charset=gbk/i.test(contentType) || /charset=gb2312/i.test(contentType)) {
-      charset = 'gbk';
-    } else {
-      // Peek into first 1024 bytes for <meta charset="..."> or http-equiv
-      const peek = buffer.subarray(0, 1024).toString('binary');
-      if (/charset=["']?(gbk|gb2312)/i.test(peek) || /content=["'][^"']*charset=(gbk|gb2312)/i.test(peek)) {
-        charset = 'gbk';
-      }
+    if (isBotChallengeHtml(html)) {
+      throw new Error('目标站点返回了人机验证页面，暂不支持直接抓取');
     }
 
-    let html = '';
-    if (charset === 'gbk') {
+    // Automatic age-verification gate bypass (e.g. age_verify.php?return=...)
+    if (
+      (res.url.includes('age_verify') || (html.includes('年龄确认') && html.includes('action') && html.includes('yes'))) &&
+      !extraInit?.headers?.Cookie
+    ) {
       try {
-        html = iconv.decode(buffer, 'gbk');
-      } catch {
-        html = buffer.toString('utf-8');
-      }
-    } else {
-      html = buffer.toString('utf-8');
+        const verifyRes = await fetch(res.url, {
+          method: 'POST',
+          headers: {
+            'User-Agent': ua,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Referer: res.url,
+          },
+          body: `return=${encodeURIComponent(url)}&action=yes`,
+          signal: AbortSignal.timeout(Math.min(timeoutMs, 8000)),
+        });
+        const setCookie = verifyRes.headers.get('set-cookie');
+        if (setCookie) {
+          const cookiePair = setCookie.split(';')[0];
+          return await fetchWithEncoding(
+            url,
+            timeoutMs,
+            {
+              ...extraInit,
+              headers: {
+                ...(extraInit?.headers || {}),
+                Cookie: cookiePair,
+              },
+            },
+            false
+          );
+        }
+      } catch {}
     }
 
     return { html, finalUrl: res.url };
   } catch (err: any) {
     clearTimeout(timer);
+    // Fallback from https:// to http:// if TLS certificate failed
+    if (allowHttpFallback && url.startsWith('https://')) {
+      const causeMsg = `${err?.message || ''} ${err?.cause?.message || ''} ${err?.cause?.code || ''}`.toLowerCase();
+      if (
+        causeMsg.includes('certificate') ||
+        causeMsg.includes('ssl') ||
+        causeMsg.includes('tls') ||
+        causeMsg.includes('fetch failed')
+      ) {
+        try {
+          return await fetchWithEncoding(url.replace(/^https:\/\//i, 'http://'), timeoutMs, extraInit, false);
+        } catch {}
+      }
+    }
     throw err;
   }
-}
-
-// Clean text formatting helper
-function formatNovelText(rawText: string): string {
-  if (!rawText) return '';
-  return rawText
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-    .replace(/<br\s*[\/]?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<h\d\b[^<]*(?:(?!<\/h\d>)<[^<]*)*<\/h\d>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    // Remove common annoying novel watermarks and navigation text
-    .replace(/上一章|下一章|章节目录|保存书签|投推荐票/g, '')
-    .replace(/请记住本书首发域名[^\n]*/g, '')
-    .replace(/一秒记住[^\n]*/g, '')
-    .replace(/手机阅读请访问[^\n]*/g, '')
-    .replace(/无弹窗小说网[^\n]*/g, '')
-    .replace(/本章未完，点击下一页继续阅读[^\n]*/g, '')
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map(line => `　　${line}`) // Chinese two-fullwidth-space indentation
-    .join('\n\n');
 }
 
 // Helper: Convert string to GBK URL encoding (e.g. %B6%B7%C2%DE%B4%F3%C2%BD)
@@ -411,23 +453,218 @@ const TRENDING_BOOKS = [
   },
 ];
 
-// Universal Web Novel Search Crawler via Search Engine (For sensitive, banned, or niche novels)
+// Direct Ethical & Urban Novel Search Sources
+async function searchBaishuwu(keyword: string): Promise<any[]> {
+  try {
+    const { html, finalUrl } = await fetchWithEncoding(
+      'https://www.baishuwu.com/search.html',
+      7000,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `s=${encodeURIComponent(keyword)}`,
+      }
+    );
+    const $ = cheerio.load(html);
+    const byUrl = new Map<string, any>();
+
+    $('.txt-list li').each((_, el) => {
+      const $li = $(el);
+      const titleA = $li.find('.s2 a').first();
+      const href = titleA.attr('href') || '';
+      const title = titleA.text().trim();
+      if (!title || !href.includes('/info/')) return;
+
+      const catalogUrl = href.startsWith('http') ? href : new URL(href, finalUrl).toString();
+      const rawAuthor3 = $li.find('.s3').text().trim();
+      const rawAuthor5 = $li.find('.s5').text().trim();
+      const author =
+        (rawAuthor3 && !rawAuthor3.includes('{?') ? rawAuthor3 : '') ||
+        (rawAuthor5 && !/^\d{2}-\d{2}$/.test(rawAuthor5) ? rawAuthor5 : '') ||
+        '网络作家';
+      const latest = $li.find('.s4 a').text().trim();
+
+      const existing = byUrl.get(catalogUrl);
+      if (!existing || (latest && existing.latestChapter === '点击查看章节目录')) {
+        byUrl.set(catalogUrl, {
+          id: 'bsw-' + Math.random().toString(36).substring(2, 9),
+          title,
+          author,
+          category: '都市伦理 / 典藏',
+          status: '完结/连载',
+          wordCount: '百书屋全本',
+          cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          intro: `百书屋实时收录《${title}》，作者：${author}${latest ? `，最新章节：${latest}` : ''}`,
+          latestChapter: latest || '点击查看章节目录',
+          sourceName: '百书屋源',
+          sourceUrl: catalogUrl,
+        });
+      }
+    });
+
+    return Array.from(byUrl.values()).slice(0, 10);
+  } catch (err: any) {
+    console.log('Search baishuwu notice:', err.message);
+    return [];
+  }
+}
+
+async function searchYunshuzhai(keyword: string): Promise<any[]> {
+  try {
+    const searchUrl = `https://yunshuzhai.com/search/result.html?searchkey=${encodeURIComponent(keyword)}`;
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 7000);
+    const $ = cheerio.load(html);
+    const results: any[] = [];
+
+    $('tr').each((_, el) => {
+      const tds = $(el).find('td');
+      if (tds.length < 4) return;
+      const category = tds.eq(0).text().trim() || '都市伦理';
+      const titleA = tds.eq(1).find('a').first();
+      const title = titleA.text().trim();
+      const href = titleA.attr('href') || '';
+      const latest = tds.eq(2).find('a').first().text().trim();
+      const author = tds.eq(3).text().trim() || '网络作家';
+
+      if (!title || !href.includes('/book/')) return;
+      const baseBookUrl = href.startsWith('http') ? href : new URL(href, finalUrl).toString();
+      const catalogUrl = baseBookUrl.replace(/\/$/, '') + '/list/';
+
+      results.push({
+        id: 'ysz-' + Math.random().toString(36).substring(2, 9),
+        title,
+        author,
+        category,
+        status: '全本/连载',
+        wordCount: '云书斋源',
+        cover: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&q=80',
+        intro: `云书斋实时收录《${title}》，作者：${author}${latest ? `，最新：${latest}` : ''}`,
+        latestChapter: latest || '点击查看章节目录',
+        sourceName: '云书斋源',
+        sourceUrl: catalogUrl,
+      });
+    });
+
+    return results.slice(0, 10);
+  } catch (err: any) {
+    console.log('Search yunshuzhai notice:', err.message);
+    return [];
+  }
+}
+
+async function searchDiyizhan(keyword: string): Promise<any[]> {
+  try {
+    const { html, finalUrl } = await fetchWithEncoding(
+      'https://www.diyizhan.org/search/',
+      7000,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `searchtype=articlename&searchkey=${encodeURIComponent(keyword)}`,
+      }
+    );
+    const $ = cheerio.load(html);
+    const results: any[] = [];
+    const seen = new Set<string>();
+
+    $('a[href*="/book/"]').each((_, el) => {
+      if (results.length >= 10) return;
+      const href = $(el).attr('href') || '';
+      const match = href.match(/\/book\/(\d+)\.html$/);
+      if (!match) return;
+      const title = $(el).text().trim();
+      if (!title || title.length < 2) return;
+      const catalogUrl = new URL(`/index/${match[1]}/`, finalUrl).toString();
+      if (seen.has(catalogUrl)) return;
+      seen.add(catalogUrl);
+
+      const containerText = $(el).closest('li, tr, div').text().replace(/\s+/g, ' ').trim();
+      const authorMatch = containerText.match(/作者[：:]\s*([^\s/]+)/);
+
+      results.push({
+        id: 'dyz-' + match[1],
+        title,
+        author: authorMatch?.[1] || '网络作家',
+        category: '伦理 / 热门连载',
+        status: '连载/完结',
+        wordCount: '第一站源',
+        cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+        intro: `第一站实时收录《${title}》完整目录与原版正文`,
+        latestChapter: '点击查看章节目录',
+        sourceName: '第一站书源',
+        sourceUrl: catalogUrl,
+      });
+    });
+
+    return results;
+  } catch (err: any) {
+    console.log('Search diyizhan notice:', err.message);
+    return [];
+  }
+}
+
+async function searchKyankanshu(keyword: string): Promise<any[]> {
+  try {
+    const searchUrl = `https://www.kyankanshu.com/search/?keyword=${encodeURIComponent(keyword)}`;
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 7000);
+    const $ = cheerio.load(html);
+    const results: any[] = [];
+    const seen = new Set<string>();
+
+    $('a[href*="/info/"]').each((_, el) => {
+      if (results.length >= 10) return;
+      const href = $(el).attr('href') || '';
+      const match = href.match(/\/info\/(\d+)\/?$/);
+      if (!match) return;
+      const title = $(el).text().trim();
+      if (!title || title.length < 2) return;
+      const catalogUrl = new URL(`/info/${match[1]}_1/`, finalUrl).toString();
+      if (seen.has(catalogUrl)) return;
+      seen.add(catalogUrl);
+
+      results.push({
+        id: 'ky-' + match[1],
+        title,
+        author: '网络作家',
+        category: '经典 / 伦理全本',
+        status: '全本/连载',
+        wordCount: '快眼书源',
+        cover: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80',
+        intro: `快眼看书实时收录《${title}》完整目录`,
+        latestChapter: '点击查看章节目录',
+        sourceName: '快眼书源',
+        sourceUrl: catalogUrl,
+      });
+    });
+
+    return results;
+  } catch (err: any) {
+    console.log('Search kyankanshu notice:', err.message);
+    return [];
+  }
+}
+
+// Universal Web Novel Search Crawler via Search Engine (For niche or long-tail novels)
 async function searchWebNovels(keyword: string): Promise<any[]> {
   try {
     const cleanQ = keyword.replace(/[《》]/g, '').trim();
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(cleanQ + ' 小说 章节列表 目录')}`;
     const res = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent': getRandomUserAgent(),
         'Accept-Language': 'zh-CN,zh;q=0.9',
       },
+      signal: AbortSignal.timeout(7000),
     });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
     const results: any[] = [];
 
-    $('.result').each((i, el) => {
+    // Filter out paywall / Cloudflare-Turnstile / dead domains that fail direct crawling
+    const BLOCKED_DOMAINS = /google\.com|duckduckgo\.com|qidian\.com|chuangshi\.qq\.com|faloo\.com|jjwxc\.net|zongheng\.com|8xsk\.com|haijiaobook\.com|baijie\.boats|xbiquge\.la/i;
+
+    $('.result').each((_, el) => {
       if (results.length >= 8) return;
       const titleRaw = $(el).find('.result__title').text().trim();
       const snippet = $(el).find('.result__snippet').text().trim();
@@ -441,15 +678,13 @@ async function searchWebNovels(keyword: string): Promise<any[]> {
         } catch {}
       }
 
-      if (!targetUrl || targetUrl.includes('google.com') || targetUrl.includes('duckduckgo.com')) return;
+      if (!targetUrl || BLOCKED_DOMAINS.test(targetUrl)) return;
 
-      // Extract clean title
       let cleanTitle = titleRaw.split(/最新章节|章节列表|目录|全文免费阅读|_|--/)[0].replace(/[《》]/g, '').trim();
       if (!cleanTitle) cleanTitle = cleanQ;
 
-      // Filter to recognized novel catalog domains or catalog indicators
       if (
-        /baishuwu|biquge|piaotia|ptwxz|8tsw|69shu|youziks|yushuwu|readercraft|xbiquge|shushuwu/i.test(targetUrl) ||
+        /baishuwu|yunshuzhai|diyizhan|kyankanshu|kkddkk|kanxiaoshuo|axikin|yzwpo|lushuwu|biquge|piaotia|ptwxz|8tsw|69shu|youziks|yushuwu|shushuwu/i.test(targetUrl) ||
         /章节|目录|全本|小说/.test(titleRaw)
       ) {
         let domain = '网络原版源';
@@ -480,79 +715,6 @@ async function searchWebNovels(keyword: string): Promise<any[]> {
   }
 }
 
-// Helper: Parse Chinese numeral strings (e.g. "二百零一", "一千六百二十四", "十二") to number
-function parseChineseNumber(str: string): number {
-  const map: Record<string, number> = {
-    '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
-    '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
-  };
-  const units: Record<string, number> = {
-    '十': 10, '百': 100, '千': 1000, '万': 10000,
-  };
-
-  let total = 0;
-  let current = 0;
-
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (map[char] !== undefined) {
-      current = map[char];
-    } else if (units[char] !== undefined) {
-      const unit = units[char];
-      if (unit === 10 && current === 0 && (i === 0 || !map[str[i - 1]])) {
-        current = 1; // e.g. "十二" -> 12
-      }
-      if (unit === 10000) {
-        total = (total + current) * 10000;
-        current = 0;
-      } else {
-        total += current * unit;
-        current = 0;
-      }
-    }
-  }
-  total += current;
-  return total;
-}
-
-// Helper: Extract chapter number for natural numerical sorting (Chapter 1 ... Chapter N)
-function extractChapterNumber(title: string): number {
-  if (!title) return 999999;
-
-  // 1. Matches "第123章", "第 123 节", "第123回"
-  const arabicMatch = title.match(/第\s*(\d+)\s*[章回节集部篇卷]/);
-  if (arabicMatch) {
-    return parseInt(arabicMatch[1], 10);
-  }
-
-  // 2. Matches "第二百零一章", "第一千六百二十四回"
-  const cnMatch = title.match(/第\s*([零〇一二两三四五六七八九十百千万]+)\s*[章回节集部篇卷]/);
-  if (cnMatch) {
-    const num = parseChineseNumber(cnMatch[1]);
-    if (num > 0) return num;
-  }
-
-  // 3. Matches bare number at start: "001 初入江湖" or "1. 第一天" or "1、开始"
-  const startNumMatch = title.match(/^(\d+)[\s.、_-]/);
-  if (startNumMatch) {
-    return parseInt(startNumMatch[1], 10);
-  }
-
-  // 4. Matches "第X" without "章"
-  const bareMatch = title.match(/第\s*(\d+)/);
-  if (bareMatch) {
-    return parseInt(bareMatch[1], 10);
-  }
-
-  // 5. Matches "Chapter 123"
-  const enMatch = title.match(/chapter\s*(\d+)/i);
-  if (enMatch) {
-    return parseInt(enMatch[1], 10);
-  }
-
-  return 999999;
-}
-
 // Result ranking helper: exact title match ranks #1, prefix match #2, shortest title #3
 function rankResults(books: any[], query: string): any[] {
   const q = query.replace(/[《》]/g, '').trim().toLowerCase();
@@ -562,19 +724,16 @@ function rankResults(books: any[], query: string): any[] {
     const aTitle = (a.title || '').replace(/[《》]/g, '').trim().toLowerCase();
     const bTitle = (b.title || '').replace(/[《》]/g, '').trim().toLowerCase();
 
-    // 1. Exact title match
     const aExact = aTitle === q;
     const bExact = bTitle === q;
     if (aExact && !bExact) return -1;
     if (!aExact && bExact) return 1;
 
-    // 2. Starts with query
     const aStarts = aTitle.startsWith(q);
     const bStarts = bTitle.startsWith(q);
     if (aStarts && !bStarts) return -1;
     if (!aStarts && bStarts) return 1;
 
-    // 3. Shorter title closer to query
     return aTitle.length - bTitle.length;
   });
 }
@@ -587,7 +746,8 @@ function rankResults(books: any[], query: string): any[] {
 app.get('/api/sources', (req, res) => {
   res.json({
     sources: [
-      { id: 'aggregate', name: '全网聚合检索', desc: '并发检索全网各大主流小说书源与热门网络镜像', enabled: true },
+      { id: 'aggregate', name: '全网聚合检索', desc: '并发检索全网各大主流小说书源与伦理典藏源', enabled: true },
+      { id: 'ethic', name: '伦理/百书屋', desc: '百书屋、云书斋、第一站、快眼等伦理与都市经典全本源', enabled: true },
       { id: 'ptwxz', name: '飘天文学镜像', desc: '经典连载网络小说镜像，海量玄幻修真全本', enabled: true },
       { id: 'bqg', name: '笔趣阁节点 01', desc: '新笔趣阁在线文学解析源', enabled: true },
       { id: 'custom', name: '自定义单链爬取', desc: '支持任意小说目录或章节链接直接解析', enabled: true },
@@ -605,10 +765,20 @@ app.get('/api/search', async (req, res) => {
     return res.json({ books: TRENDING_BOOKS, isPreset: true });
   }
 
-  // Direct URL support: if user pasted a full URL into the search bar, directly return as actionable target
-  if (query.startsWith('http://') || query.startsWith('https://')) {
+  // Direct URL support: accept http(s):// or bare domain URLs (e.g. www.baishuwu.com/info/188122/)
+  let normalizedDirectUrl = '';
+  if (
+    /^https?:\/\//i.test(query) ||
+    /^[a-z0-9.-]+\.[a-z]{2,}\//i.test(query)
+  ) {
     try {
-      const { html, finalUrl } = await fetchWithEncoding(query, 8000);
+      normalizedDirectUrl = normalizeCrawlUrl(query);
+    } catch {}
+  }
+
+  if (normalizedDirectUrl) {
+    try {
+      const { html, finalUrl } = await fetchWithEncoding(normalizedDirectUrl, 8000);
       const $ = cheerio.load(html);
       const pageTitle = $('h1').first().text().trim() || $('title').text().split(/_|-|最新章节|章节列表/)[0].trim() || '网络小说/文章';
       const pageAuthor = $('.author, .writer').first().text().replace(/作者[：:]/g, '').trim() || '网络源';
@@ -644,10 +814,10 @@ app.get('/api/search', async (req, res) => {
             status: '待解析',
             wordCount: '点击解析',
             cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
-            intro: `目标网址：${query}，点击进入阅读或提取章节。`,
+            intro: `目标网址：${normalizedDirectUrl}，点击进入阅读或提取章节。`,
             latestChapter: '点击进入',
             sourceName: '单链直转',
-            sourceUrl: query,
+            sourceUrl: normalizedDirectUrl,
             isDirectUrl: true,
           },
         ],
@@ -668,16 +838,29 @@ app.get('/api/search', async (req, res) => {
 
   let crawledResults: any[] = [];
 
-  // Concurrently scrape from ptwxz, biquge, and web search
+  // Concurrently scrape direct sources + web search fallback
   try {
     let promises: Promise<any[]>[] = [];
     if (source === 'ptwxz') {
-      promises = [searchPtwxz(query)];
+      promises = [searchPtwxz(cleanQ)];
     } else if (source === 'bqg') {
-      promises = [searchBiquge(query)];
+      promises = [searchBiquge(cleanQ)];
+    } else if (source === 'ethic') {
+      promises = [
+        searchBaishuwu(cleanQ),
+        searchYunshuzhai(cleanQ),
+        searchDiyizhan(cleanQ),
+        searchKyankanshu(cleanQ),
+      ];
     } else {
-      // Aggregate: search both primary sources
-      promises = [searchPtwxz(query), searchBiquge(query)];
+      promises = [
+        searchBaishuwu(cleanQ),
+        searchYunshuzhai(cleanQ),
+        searchDiyizhan(cleanQ),
+        searchKyankanshu(cleanQ),
+        searchPtwxz(cleanQ),
+        searchBiquge(cleanQ),
+      ];
     }
 
     const settled = await Promise.allSettled(promises);
@@ -687,8 +870,8 @@ app.get('/api/search', async (req, res) => {
       }
     }
 
-    // If primary sources found 0 or few results, invoke universal web search
-    if (crawledResults.length < 2) {
+    // Invoke universal web search if direct sources returned fewer than 3 results
+    if (crawledResults.length < 3) {
       const webResults = await searchWebNovels(cleanQ);
       crawledResults.push(...webResults);
     }
@@ -696,11 +879,11 @@ app.get('/api/search', async (req, res) => {
     console.log('Search aggregation notice:', err.message);
   }
 
-  // Combine and deduplicate
+  // Combine and deduplicate by sourceUrl (so same book from different working sources remains selectable!)
   const combined = [...localMatches, ...crawledResults];
   const uniqueMap = new Map();
   combined.forEach(b => {
-    const key = `${b.title.trim()}-${b.author.trim()}`;
+    const key = `${(b.sourceUrl || '').trim() || `${b.title.trim()}-${b.author.trim()}`}`;
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, b);
     }
@@ -734,46 +917,46 @@ app.get('/api/book-detail', async (req, res) => {
   }
 
   try {
+    targetUrl = normalizeCrawlUrl(targetUrl);
+
     // Normalization for ptwxz
     if (targetUrl.includes('/bookinfo/')) {
       targetUrl = targetUrl.replace('/bookinfo/', '/html/').replace('.html', '/index.html');
     }
 
     const initialRes = await fetchWithEncoding(targetUrl, 10000);
+    const originalFinalUrl = initialRes.finalUrl;
     let { html, finalUrl } = initialRes;
     let $ = cheerio.load(html);
 
-    // Check if targetUrl is actually a chapter/article page instead of a catalog
-    const isSingleChapterUrl = /\/read\/|\d+\.html/.test(finalUrl) && !/index|\/info\/|\/book\//.test(finalUrl);
-    if (isSingleChapterUrl) {
-      // Try to find a link back to the catalog / book info on the page
-      let catalogFound = '';
-      $('a').each((_, el) => {
-        if (catalogFound) return;
-        const txt = $(el).text().trim();
-        const href = $(el).attr('href');
-        if (!href || href.startsWith('javascript') || href === '#') return;
-        if (/目录|章节列表|返回书页|书籍详情|书目/.test(txt) || href.includes('/info/') || href.includes('/book/')) {
-          try {
-            catalogFound = new URL(href, finalUrl).toString();
-          } catch {}
-        }
-      });
-
-      if (catalogFound) {
-        // Switch to the discovered catalog page
-        targetUrl = catalogFound;
-        const catRes = await fetchWithEncoding(catalogFound, 10000);
-        html = catRes.html;
-        finalUrl = catRes.finalUrl;
-        $ = cheerio.load(html);
+    // Check if current page is a book-info / single-chapter page with an explicit TOC / all-chapters link
+    let catalogUpgradeUrl = '';
+    $('a').each((_, el) => {
+      if (catalogUpgradeUrl) return;
+      const txt = $(el).text().trim();
+      const href = $(el).attr('href') || '';
+      if (isCatalogUpgradeLink(txt, href, finalUrl)) {
+        try {
+          catalogUpgradeUrl = new URL(href, finalUrl).toString();
+        } catch {}
       }
+    });
+
+    if (catalogUpgradeUrl && catalogUpgradeUrl !== finalUrl) {
+      try {
+        const catRes = await fetchWithEncoding(catalogUpgradeUrl, 10000);
+        if (catRes.html && catRes.html.length > 500) {
+          html = catRes.html;
+          finalUrl = catRes.finalUrl;
+          $ = cheerio.load(html);
+        }
+      } catch {}
     }
 
     // Extract book title
-    const title = $('h1').first().text().replace(/百书屋/g, '').replace(/作者[：:].*/g, '').trim() || 
-                  $('.book-name, .info h1, .title, meta[property="og:novel:book_name"]').attr('content') || 
-                  $('title').text().split(/最新章节|章节列表|无弹窗|,/)[0].trim() ||
+    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').trim() ||
+                  $('.book-name, .info h1, .title, meta[property="og:novel:book_name"]').attr('content') ||
+                  $('title').text().split(/最新章节|章节列表|章节目录|无弹窗|,|_|-/)[0].replace(/[《》]/g, '').trim() ||
                   '精选作品';
 
     // Extract author
@@ -798,42 +981,43 @@ app.get('/api/book-detail', async (req, res) => {
     const catalogPageUrls = new Set<string>();
     catalogPageUrls.add(finalUrl);
 
-    // Follow links like 查看更多章节, 下一页, 更多目录
+    // Follow pagination links (下一页, 更多目录, select options, .pages)
     $('a').each((_, el) => {
       const txt = $(el).text().trim();
       const href = $(el).attr('href');
       if (!href || href.startsWith('javascript') || href === '#') return;
-      if (/查看更多章节|下一页|下页|更多目录|全部目录|完整目录/.test(txt)) {
+      if (/^(查看更多章节|下一页|下页|更多目录|全部目录|完整目录|第\s*\d+\s*页)$/i.test(txt)) {
         try {
-          catalogPageUrls.add(new URL(href, finalUrl).toString());
+          const resolved = new URL(href, finalUrl).toString();
+          if (isSameSiteHost(resolved, finalUrl)) catalogPageUrls.add(resolved);
         } catch {}
       }
     });
 
-    // Case 1: Select dropdown options (e.g., baishuwu, biquge pagination dropdowns)
     $('select option').each((_, opt) => {
       const val = $(opt).attr('value');
       const txt = $(opt).text().trim();
       if (val && !val.startsWith('javascript') && (val.includes('/info/') || val.includes('/book/') || val.includes('/html/') || /\d+/.test(val) || /第\s*\d+\s*页/.test(txt))) {
         try {
-          catalogPageUrls.add(new URL(val, finalUrl).toString());
+          const resolved = new URL(val, finalUrl).toString();
+          if (isSameSiteHost(resolved, finalUrl)) catalogPageUrls.add(resolved);
         } catch {}
       }
     });
 
-    // Case 2: Pagination bar links (e.g. .pages a, .page a, a:contains('下一页'))
     $('.pages a, .page a, .pagination a, #pagelist a, .listpage a, .page-box a').each((_, el) => {
       const href = $(el).attr('href');
       if (href && !href.startsWith('javascript') && href !== '#') {
         try {
-          catalogPageUrls.add(new URL(href, finalUrl).toString());
+          const resolved = new URL(href, finalUrl).toString();
+          if (isSameSiteHost(resolved, finalUrl)) catalogPageUrls.add(resolved);
         } catch {}
       }
     });
 
-    // Case 3: Baishuwu known pagination pattern /info/{id}/, /info/{id}/1/, /2/, /3/, /4/, /5/
+    // Baishuwu fallback pagination only if DOM didn't expose multiple pages
     const bswMatch = finalUrl.match(/baishuwu\.com\/info\/(\d+)/);
-    if (bswMatch) {
+    if (bswMatch && catalogPageUrls.size <= 1) {
       const bswId = bswMatch[1];
       catalogPageUrls.add(`https://www.baishuwu.com/info/${bswId}/`);
       for (let p = 1; p <= 6; p++) {
@@ -841,8 +1025,8 @@ app.get('/api/book-detail', async (req, res) => {
       }
     }
 
-    // Fetch all catalog pages concurrently (limit to 12 pages max to prevent abuse)
-    const pagesToFetch = Array.from(catalogPageUrls).slice(0, 12);
+    // Fetch up to 10 catalog pages concurrently (respects Cloudflare Workers subrequest budget)
+    const pagesToFetch = Array.from(catalogPageUrls).slice(0, 10);
     const catalogHtmlList: { html: string; pageUrl: string }[] = [{ html, pageUrl: finalUrl }];
 
     if (pagesToFetch.length > 1) {
@@ -870,21 +1054,18 @@ app.get('/api/book-detail', async (req, res) => {
     const uniqueChapterMap = new Map<string, ChapterRawItem>();
     let orderCounter = 0;
 
-    const NON_CHAPTER_REGEX = /首页|书架|登录|注册|留言|推荐|排行榜|下载|分类|加书签|投推荐|返回书页|开始阅读|最新更新|txt下载|手机版|电脑版|下一页|上一页|目录|加入书签|玄幻修真|都市言情|武侠仙侠|历史军事|科幻灵异|恐怖惊悚|网游竞技|女生耽美|其它类型|全本小说|完结小说|加入书架|繁體|简体|设为首页|收藏本站|章节目录|保存书签/i;
-
     for (const { html: pageHtml, pageUrl } of catalogHtmlList) {
       const page$ = cheerio.load(pageHtml);
-      const catalogContainers = page$('#list, .listmain, .centent, .book-list, #chapters, .catalog, .chapter-list, .chapter-list-box, .book_chapter, .volume, .chapterlist, dl, .layout-col1, .section-list');
-      const targetScope = catalogContainers.length > 0 ? catalogContainers : page$('body');
+      const catalogContainers = page$(
+        '#list, .listmain, .centent, .book-list, #chapters, .catalog, .chapter-list, .chapter-list-box, .book_chapter, .volume, .chapterlist, dl, .layout-col1, .section-list, .grid, .mulu, ul.chapter, #chapterlist'
+      );
+      const inContainer = catalogContainers.length > 0;
+      const targetScope = inContainer ? catalogContainers : page$('body');
 
       targetScope.find('a').each((_, el) => {
         const $a = page$(el);
-        const chTitle = $a.text().trim();
         const chHref = $a.attr('href');
-
-        if (!chHref || chHref.startsWith('javascript') || chHref === '#' || chTitle.length < 2 || chTitle.length > 70) return;
-        if (NON_CHAPTER_REGEX.test(chTitle)) return;
-        if (/开始阅读|继续阅读|最新章节|全部章节|目录|书页/.test(chTitle)) return;
+        if (!chHref || chHref.startsWith('javascript') || chHref === '#') return;
 
         let fullUrl = '';
         try {
@@ -893,17 +1074,20 @@ app.get('/api/book-detail', async (req, res) => {
           return;
         }
 
-        try {
-          const parsedUrl = new URL(fullUrl);
-          // Chapter URL must not be info, login, mybook, tag, search, list
-          if (parsedUrl.pathname.includes('/info/') || parsedUrl.pathname.includes('/login') || parsedUrl.pathname.includes('/mybook') || parsedUrl.pathname.includes('/list/')) return;
-          // Must have chapter-like path
-          if (!/\.(?:html?|shtml?)(?:$|\/)|\/read\/|\/html\//i.test(parsedUrl.pathname) && !/[?&](?:chapter|cid|id)=\d+/i.test(parsedUrl.search)) return;
-        } catch {
-          return;
+        if (catalogPageUrls.has(fullUrl)) return;
+
+        let chTitle = $a.text().replace(/\s+/g, ' ').trim() || ($a.attr('title') || '').trim();
+        // Handle sites like yunshuzhai where chapter <a> text is empty or placeholder "（）"
+        if (!chTitle || chTitle === '（）' || chTitle === '()') {
+          if (inContainer && /\/\d+(?:\.html)?$/i.test(fullUrl)) {
+            const numMatch = fullUrl.match(/\/(\d+)(?:\.html)?$/i);
+            chTitle = numMatch ? `第${numMatch[1]}章` : `第${orderCounter + 1}章`;
+          } else {
+            return;
+          }
         }
 
-        if (fullUrl === pageUrl) return;
+        if (!isLikelyChapterLink(fullUrl, pageUrl, chTitle, inContainer)) return;
 
         if (!uniqueChapterMap.has(fullUrl)) {
           const chNum = extractChapterNumber(chTitle);
@@ -920,8 +1104,7 @@ app.get('/api/book-detail', async (req, res) => {
     // Convert map to list
     const rawChapters = Array.from(uniqueChapterMap.values());
 
-    // Sort chapters:
-    // If chapters contain parsed numbers (e.g. Chapter 1, Chapter 201), sort numerically ascending
+    // Sort chapters numerically if chapter numbers are present
     const hasValidNumbers = rawChapters.filter(c => c.chapterNumber < 999999).length > Math.min(rawChapters.length * 0.4, 5);
 
     if (hasValidNumbers) {
@@ -942,12 +1125,12 @@ app.get('/api/book-detail', async (req, res) => {
       url: c.url,
     }));
 
-    // If still 0 chapters but it's a valid article page, treat as single chapter
-    if (chapters.length === 0 && html.length > 500) {
+    // Single-article / single-chapter fallback: keep user's original pasted URL
+    if (chapters.length === 0 && html.length > 300) {
       chapters.push({
         index: 1,
         title: title || '第一章 正文',
-        url: finalUrl,
+        url: originalFinalUrl,
       });
     }
 
@@ -1029,10 +1212,16 @@ app.get('/api/chapter-content', async (req, res) => {
     }
 
     const candidates = [
+      'article.reading-container',
+      '.reading-container',
       '#nr1',
       '.showtxt',
       '#content',
       '#chaptercontent',
+      '#BookText',
+      '.txtnav',
+      '.readmain',
+      '.chapter_content',
       '.read-content',
       '.chapter-content',
       '[itemprop="articleBody"]',

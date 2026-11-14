@@ -9,7 +9,7 @@ interface CustomUrlCrawlerProps {
 const SAMPLE_URLS = [
   { name: '母上攻略全本（489章完整版）', url: 'https://www.baishuwu.com/info/188122/' },
   { name: '飘天文学斗破苍穹全本源', url: 'https://www.piaotia.com/html/0/706/index.html' },
-  { name: '新笔趣阁在线文学源', url: 'https://www.xbiquge.la/15/15338/' },
+  { name: '云书斋风流教师（415章全本）', url: 'https://yunshuzhai.com/book/30570/list/' },
 ];
 
 export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook }) => {
@@ -17,13 +17,24 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const normalizeInputUrl = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(trimmed)) {
+      return `https://${trimmed}`;
+    }
+    return trimmed;
+  };
+
   const handleCrawl = async (targetUrl: string) => {
-    if (!targetUrl.trim()) return;
+    const normalizedUrl = normalizeInputUrl(targetUrl);
+    if (!normalizedUrl) return;
     setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch(`/api/book-detail?url=${encodeURIComponent(targetUrl.trim())}`);
+      const res = await fetch(`/api/book-detail?url=${encodeURIComponent(normalizedUrl)}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status} 抓取异常`);
@@ -44,7 +55,7 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
         cover: data.book.cover || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
         intro: data.book.intro || '通过单链万能爬虫抓取解析的小说',
         sourceName: '万能单链爬虫',
-        sourceUrl: data.book.sourceUrl || targetUrl.trim(),
+        sourceUrl: data.book.sourceUrl || normalizedUrl,
         chapters: data.book.chapters || [],
         totalChapters: data.book.totalChapters || 0,
       };
@@ -74,7 +85,7 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
       <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl p-6 shadow-sm space-y-5">
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-semibold text-stone-700 dark:text-stone-300">
+            <label htmlFor="custom-crawler-url" className="text-xs font-semibold text-stone-700 dark:text-stone-300">
               小说/文章目标网址 (URL)
             </label>
             <a
@@ -87,16 +98,24 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
             </a>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-2">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleCrawl(urlInput);
+            }}
+            className="flex flex-col sm:flex-row gap-2"
+          >
             <input
-              type="url"
+              id="custom-crawler-url"
+              type="text"
+              inputMode="url"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="例如: https://www.baishuwu.com/info/188122/ 或任意小说章节链接"
+              placeholder="例如: https://www.baishuwu.com/info/188122/ 或 www.kkddkk.com/bk/18316/chapters"
               className="flex-1 px-4 py-3 bg-stone-50 dark:bg-stone-800 border border-stone-300 dark:border-stone-700 rounded-xl text-stone-900 dark:text-stone-100 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/50"
             />
             <button
-              onClick={() => handleCrawl(urlInput)}
+              type="submit"
               disabled={loading || !urlInput.trim()}
               className="px-5 py-3 bg-amber-600 hover:bg-amber-700 disabled:bg-stone-300 dark:disabled:bg-stone-700 text-white font-medium text-xs sm:text-sm rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2 shrink-0"
             >
@@ -112,7 +131,7 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
                 </>
               )}
             </button>
-          </div>
+          </form>
         </div>
 
         {/* Quick Sample Links */}

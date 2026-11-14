@@ -65,7 +65,8 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
 
         const res = await fetch(`/api/book-detail?${queryParams}`);
         if (!res.ok) {
-          throw new Error('获取小说目录失败，源站可能超时');
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || '获取小说目录失败，源站可能超时');
         }
         const data = await res.json();
         if (data.book && data.book.chapters) {

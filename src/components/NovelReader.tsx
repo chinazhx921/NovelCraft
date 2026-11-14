@@ -36,6 +36,7 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
   const [subpageCount, setSubpageCount] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   // Settings
   const [showSettings, setShowSettings] = useState(false);
@@ -90,7 +91,8 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
         }
 
         if (!res.ok) {
-          throw new Error('章节正文加载失败，源站可能超时或需要刷新');
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || '章节正文加载失败，源站可能超时或需要刷新');
         }
 
         const data = await res.json();
@@ -119,7 +121,7 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
     return () => {
       active = false;
     };
-  }, [currentChapterIndex, novel]);
+  }, [currentChapterIndex, novel, retryTick]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -337,7 +339,7 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
           <div className="py-16 text-center space-y-4">
             <p className="text-red-600 dark:text-red-400 text-sm font-medium">{error}</p>
             <button
-              onClick={() => setCurrentChapterIndex(currentChapterIndex)}
+              onClick={() => setRetryTick((t) => t + 1)}
               className="px-4 py-2 bg-amber-600 text-white text-xs rounded-lg shadow-sm"
             >
               重新抓取本章

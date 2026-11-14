@@ -81,7 +81,7 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
                 </>
               ) : (
                 <>
-                  <span>{keyword.trim().startsWith('http') ? '直接转阅读' : '搜索抓取'}</span>
+                  <span>{/^(https?:\/\/|[a-z0-9.-]+\.[a-z]{2,}\/)/i.test(keyword.trim()) ? '直接转阅读' : '搜索抓取'}</span>
                   <ArrowRight className="w-4 h-4 hidden sm:inline" />
                 </>
               )}
@@ -93,7 +93,7 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
       {/* Filter Tabs & Search Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm pt-1">
         {/* Source Segmented Control */}
-        <div className="flex items-center gap-1 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg">
           <button
             type="button"
             onClick={() => onSourceChange('aggregate')}
@@ -104,6 +104,17 @@ export const SearchHeader: React.FC<SearchHeaderProps> = ({
             }`}
           >
             聚合全网源
+          </button>
+          <button
+            type="button"
+            onClick={() => onSourceChange('ethic')}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              activeSource === 'ethic'
+                ? 'bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100 shadow-sm'
+                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200'
+            }`}
+          >
+            伦理/百书屋
           </button>
           <button
             type="button"
