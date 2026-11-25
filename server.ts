@@ -187,9 +187,9 @@ async function fetchWithEncoding(
 
 // Google Translate proxy URL for a page, keeping the text in Chinese
 // (_x_tr_tl=zh-CN). Used ONLY as a fallback when the source site returns
-// 520/403/503 to Cloudflare Workers: baishuwu.com and kyankanshu.com both
-// block Worker egress IPs with HTTP 520, while Google fetches the same
-// pages fine (verified: translate.goog returns the full catalog).
+// 520/403/503/429 to Cloudflare Workers: baishuwu.com blocks Worker egress
+// IPs with HTTP 520 and baishuwu.org with HTTP 429, while Google fetches
+// the same pages fine (verified: translate.goog returns the full catalog).
 function toTranslateUrl(rawUrl: string): string | null {
   try {
     const u = new URL(rawUrl);
@@ -208,6 +208,7 @@ function isBotBlockError(err: any): boolean {
     /http 520/.test(msg) ||
     /http 403/.test(msg) ||
     /http 503/.test(msg) ||
+    /http 429/.test(msg) ||
     /人机验证/.test(msg) ||
     /fetch failed/.test(msg)
   );
@@ -215,7 +216,7 @@ function isBotBlockError(err: any): boolean {
 
 // Fetch with a translate-proxy fallback for bot-blocked source sites.
 // Direct fetch first (fast, preserves original URLs); only on a 520/403/
-// 503 bot block do we retry via translate.goog, whose HTML keeps the
+// 503/429 bot block do we retry via translate.goog, whose HTML keeps the
 // chapter links (rewritten to translate.goog) and the Chinese text.
 async function fetchWithTranslateFallback(
   rawUrl: string,
@@ -477,15 +478,19 @@ const TRENDING_BOOKS = [
     author: '竹影随行',
     category: '都市伦理 / 经典长篇',
     status: '完结',
-    wordCount: '134万字',
+    // Chapter count differs by edition, so it is NOT hardcoded: 第一站
+    // has 133 full-length chapters (~7.7k chars each, proper finale,
+    // ~102万字 estimated), while baishuwu.org splits a different edition
+    // into 489 fragments (~1.9k chars each, ~91万字, ends mid-scene).
+    // Verified 2026-11-25 by sampling chapter contents on both sources;
+    // the old preset claim “第489章 终章” came from inconsistent source
+    // metadata. 第一站 is used for its full-length chapters and real
+    // ending; wordCount/latestChapter stay empty so the card never
+    // claims a number the fetched catalog cannot back up.
+    wordCount: '',
     cover: '',
     intro: '都市长篇代表作。细腻讲述了在经历家庭生活风波后，主角在复杂纠葛的现实生活与道德伦理边缘逐步产生的心路历程。文笔细腻逼真，人物心理刻画入微。',
-    latestChapter: '第489章 终章·圆满与释怀',
-    // NOTE: baishuwu.com returns HTTP 520 to Cloudflare Workers (bot
-    // protection on Worker egress IPs) while working from a normal server,
-    // so the homepage card 520'd on the live site. 第一站 is the same
-    // book and reachable from Workers; keep the baishuwu URL as the
-    // fallback in book-detail instead.
+    latestChapter: '',
     sourceName: '第一站书源',
     sourceUrl: 'https://www.diyizhan.org/index/1531/',
   },
@@ -526,9 +531,15 @@ const TRENDING_BOOKS = [
     wordCount: '168万字',
     cover: '',
     intro: '当代都市商海长篇传奇。主角侯龙涛从底层小职员起步，凭借过人的胆识、远见以及对复杂人性的洞察，在商场搏杀与权谋博弈中一步步登顶。',
-    latestChapter: '第112章 金鳞腾空（大结局）',
+    latestChapter: '第二百二十九章 逍遥自在（大结局）',
+    // NOTE: the old preset said 第112章, but the full catalog's main story
+    // runs to 第229章 逍遥自在（大结局） (verified 2026-11-25 on both
+    // baishuwu.com and .org: 229 main + 41 外传 + 8 改编 = 279). The 112
+    // figure was stale source metadata. baishuwu.org is cleaner than .com
+    // (its catalog has no junk entries like “当前正序”); direct fetch 429s
+    // from Workers and falls back to the translate proxy.
     sourceName: '百书屋典藏源',
-    sourceUrl: 'https://www.baishuwu.com/info/18009/',
+    sourceUrl: 'https://www.baishuwu.org/info/18009/',
   },
 ];
 
@@ -1123,7 +1134,7 @@ app.get('/api/book-detail', async (req, res) => {
     }
 
     // Extract book title
-    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').replace(/最新章节.*$/, '').replace(/全文阅读.*$/, '').replace(/章节目录\s*$/, '').trim() ||
+    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').replace(/最新章节.*$/, '').replace(/全文阅读.*$/, '').replace(/章节目录\s*$/, '').replace(/\s+\/\s*[A-Za-z0-9_.\- ]+$/, '').replace(/\s+/g, ' ').trim() ||
                   $('.book-name, .info h1, .title, meta[property="og:novel:book_name"]').attr('content') ||
                   $('title').text().split(/最新章节|章节列表|章节目录|无弹窗|,|_|-/)[0].replace(/[《》]/g, '').trim() ||
                   '精选作品';
@@ -1184,15 +1195,51 @@ app.get('/api/book-detail', async (req, res) => {
       }
     });
 
-    // Baishuwu fallback pagination only if DOM didn't expose multiple pages
-    // (check targetUrl too: via the translate proxy finalUrl is translate.goog)
-    const bswMatch = finalUrl.match(/baishuwu\.com\/info\/(\d+)/) || targetUrl.match(/baishuwu\.com\/info\/(\d+)/);
-    if (bswMatch && catalogPageUrls.size <= 1) {
-      const bswId = bswMatch[1];
-      catalogPageUrls.add(`https://www.baishuwu.com/info/${bswId}/`);
-      for (let p = 1; p <= 6; p++) {
-        catalogPageUrls.add(`https://www.baishuwu.com/info/${bswId}/${p}/`);
+    // Baishuwu catalog pagination: the site splits catalogs into
+    // /info/<id>/, /1/, /2/ ... pages. Do not trust the page markup
+    // alone: Google Translate strips or rewrites the pagination <select>
+    // and resolves relative page links WITHOUT the _x_tr_* query params,
+    // and translate.goog without those params answers HTTP 400 with zero
+    // chapters (verified 2026-11-25: same page 400 without params, 200
+    // with). So always make sure pages 1-6 are present, in the same form
+    // (direct or translate-proxy) as the page we came from.
+    const bswDirect = finalUrl.match(/baishuwu\.(com|org)\/info\/(\d+)/) || targetUrl.match(/baishuwu\.(com|org)\/info\/(\d+)/);
+    const bswViaTr = finalUrl.match(/www-baishuwu-(com|org)\.translate\.goog\/info\/(\d+)/);
+    const trQuery = (() => {
+      try {
+        const f = new URL(finalUrl);
+        return f.search || '?_x_tr_sl=auto&_x_tr_tl=zh-CN&_x_tr_hl=zh-CN';
+      } catch {
+        return '?_x_tr_sl=auto&_x_tr_tl=zh-CN&_x_tr_hl=zh-CN';
       }
+    })();
+    if (bswViaTr) {
+      const trHost = `www-baishuwu-${bswViaTr[1]}.translate.goog`;
+      catalogPageUrls.add(`https://${trHost}/info/${bswViaTr[2]}/${trQuery}`);
+      for (let p = 1; p <= 6; p++) {
+        catalogPageUrls.add(`https://${trHost}/info/${bswViaTr[2]}/${p}/${trQuery}`);
+      }
+    } else if (bswDirect) {
+      const bswHost = bswDirect[1] === 'org' ? 'www.baishuwu.org' : 'www.baishuwu.com';
+      const bswId = bswDirect[2];
+      catalogPageUrls.add(`https://${bswHost}/info/${bswId}/`);
+      for (let p = 1; p <= 6; p++) {
+        catalogPageUrls.add(`https://${bswHost}/info/${bswId}/${p}/`);
+      }
+    }
+
+    // Re-attach the translate query params to any translate.goog catalog
+    // URL that lost them during link resolution (see above): without them
+    // the proxy returns HTTP 400 and that page contributes zero chapters.
+    for (const u of Array.from(catalogPageUrls)) {
+      try {
+        const parsed = new URL(u);
+        if (parsed.hostname.endsWith('.translate.goog') && !parsed.searchParams.has('_x_tr_sl')) {
+          parsed.search = trQuery.startsWith('?') ? trQuery.slice(1) : trQuery;
+          catalogPageUrls.delete(u);
+          catalogPageUrls.add(parsed.toString());
+        }
+      } catch {}
     }
 
     // Fetch up to 10 catalog pages concurrently (respects Cloudflare Workers subrequest budget)
@@ -1204,10 +1251,26 @@ app.get('/api/book-detail', async (req, res) => {
       const settledPages = await Promise.allSettled(
         otherPages.map(pageUrl => fetchWithTranslateFallback(pageUrl, 8000))
       );
-      for (const res of settledPages) {
+      const failedUrls: string[] = [];
+      settledPages.forEach((res, i) => {
         if (res.status === 'fulfilled' && res.value.html) {
           catalogHtmlList.push({ html: res.value.html, pageUrl: res.value.finalUrl });
+        } else {
+          failedUrls.push(otherPages[i]);
         }
+      });
+      // Retry failed catalog pages once: translate-proxy fetches are flaky
+      // and a dropped page silently truncates the catalog (seen live:
+      // 母上攻略 returned 227/489 chapters, 金鳞 126-228 instead of 279).
+      if (failedUrls.length > 0) {
+        const retrySettled = await Promise.allSettled(
+          failedUrls.map(pageUrl => fetchWithTranslateFallback(pageUrl, 8000))
+        );
+        retrySettled.forEach((res) => {
+          if (res.status === 'fulfilled' && res.value.html) {
+            catalogHtmlList.push({ html: res.value.html, pageUrl: res.value.finalUrl });
+          }
+        });
       }
     }
 
@@ -1268,7 +1331,7 @@ app.get('/api/book-detail', async (req, res) => {
         const junkTitle = chTitle.replace(/\s+/g, '');
         if (
           !/^第/.test(chTitle) &&
-          /^(广告|求月票|求保底月票|通知|更新通知|本月更新|第一！|月底之事.*|码字间隙.*|.*vip订阅群|.*感言|结束语.*|我的新书.*|.*新书.*已上传|.*新书.*上传|求月票.*|第七段|第九段|第一轮.*|第二轮|第一重.*|第二层|第三|第三层)$/.test(junkTitle)
+          /^(广告|网站公告|本站公告|求月票|求保底月票|通知|更新通知|本月更新|第一！|月底之事.*|码字间隙.*|.*vip订阅群|.*感言|结束语.*|我的新书.*|.*新书.*已上传|.*新书.*上传|求月票.*|第七段|第九段|第一轮.*|第二轮|第一重.*|第二层|第三|第三层)$/.test(junkTitle)
         ) {
           return;
         }
