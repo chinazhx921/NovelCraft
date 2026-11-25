@@ -369,15 +369,46 @@ export const NovelReader: React.FC<NovelReaderProps> = ({
               </div>
             </header>
 
-            {/* Formatted Text Body */}
+            {/* Formatted Text Body: renders [IMAGE:url] markers (kept by
+                the backend for image-based chapters) as real images,
+                in their original position in the text. */}
             <div
-              className={`leading-relaxed whitespace-pre-wrap select-text text-justify ${fontClass}`}
+              className={`leading-relaxed select-text text-justify ${fontClass}`}
               style={{
                 fontSize: `${settings.fontSize}px`,
                 lineHeight: settings.lineHeight,
               }}
             >
-              {chapterContent}
+              {chapterContent.split(/\n\n+/).map((block, i) => {
+                const trimmed = block.trim();
+                const imgMatch = trimmed.match(/^\[IMAGE:(https?:\/\/[^\]]+)\]$/);
+                if (imgMatch) {
+                  return (
+                    <img
+                      key={i}
+                      src={imgMatch[1]}
+                      alt="章节图片"
+                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      className="mx-auto my-4 max-w-full rounded-lg shadow-sm"
+                      onError={(e) => {
+                        // Show the URL instead of a broken-image icon.
+                        const el = e.target as HTMLImageElement;
+                        el.style.display = 'none';
+                        const fallback = document.createElement('div');
+                        fallback.className = 'text-center text-xs opacity-60 py-4';
+                        fallback.textContent = `【章节图片无法加载：${imgMatch[1]}】`;
+                        el.parentNode?.insertBefore(fallback, el.nextSibling);
+                      }}
+                    />
+                  );
+                }
+                return (
+                  <p key={i} className="whitespace-pre-wrap mb-4 last:mb-0">
+                    {block}
+                  </p>
+                );
+              })}
             </div>
 
             {/* Bottom Chapter Switcher Navigation */}

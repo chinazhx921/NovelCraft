@@ -71,6 +71,22 @@ export function formatNovelText(rawText: string): string {
   return rawText
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    // Preserve chapter images: many source chapters are image-based
+    // (scanned pages). Previously every <img> was stripped by the generic
+    // tag remover below, so those chapters came back as empty text.
+    // Convert each image to a marker line first; the reader renders it
+    // as an <img>, and TXT export keeps the URL.
+    .replace(/<img\b[^>]*>/gi, (tag) => {
+      const m =
+        tag.match(/data-original\s*=\s*["']([^"']+)["']/i) ||
+        tag.match(/data-src\s*=\s*["']([^"']+)["']/i) ||
+        tag.match(/data-lazy-src\s*=\s*["']([^"']+)["']/i) ||
+        tag.match(/src\s*=\s*["']([^"']+)["']/i);
+      const src = (m?.[1] || '').trim();
+      if (!src || src.startsWith('data:')) return '';
+      const abs = src.startsWith('//') ? `https:${src}` : src;
+      return `\n[IMAGE:${abs}]\n`;
+    })
     .replace(/<br\s*[\/]?>/gi, '\n')
     .replace(/<\/?(?:p|div)\b[^>]*>/gi, '\n')
     .replace(/<h\d\b[^<]*(?:(?!<\/h\d>)<[^<]*)*<\/h\d>/gi, '\n')
@@ -92,7 +108,8 @@ export function formatNovelText(rawText: string): string {
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .filter((line) => !/^(上章|下章|目录|存书签|上一页|下一页|首页|书架|报错|投票)$/.test(line))
-    .map((line) => `　　${line}`)
+    .filter((line) => !/^\[IMAGE:\]$/.test(line))
+    .map((line) => (line.startsWith('[IMAGE:') ? line : `　　${line}`))
     .join('\n\n');
 }
 
@@ -101,6 +118,13 @@ export function parseChineseNumber(str: string): number {
     '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
     '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
   };
+  // Digit-sequence form used by many source sites, e.g. "一五三一" = 1531,
+  // "第一二章" = 12. The old loop overwrote `current` on each digit and
+  // returned only the last digit (1), which broke chapter sorting and
+  // produced the "第一章, 第一五三一章, 第二章" disorder seen on 遮天.
+  if (/^[零〇一二两三四五六七八九]+$/.test(str) && str.length > 1) {
+    return parseInt(str.split('').map((c) => String(map[c] ?? 0)).join(''), 10);
+  }
   const units: Record<string, number> = {
     '十': 10, '百': 100, '千': 1000, '万': 10000,
   };

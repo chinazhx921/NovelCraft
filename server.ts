@@ -14,6 +14,29 @@ import {
 
 const app = express();
 
+// Simple in-memory cache for scraped API responses. Workers are stateless
+// across isolates, but within one isolate repeat searches / re-opens are
+// common (hot keywords, back-and-forth between detail and reader), and
+// live scraping costs 4-20s per call. TTLs are short so stale catalogs
+// do not linger: search 5 min, catalog 10 min, chapter text 30 min.
+const apiCache = new Map<string, { ts: number; data: any }>();
+function cacheGet(key: string, ttlMs: number): any | null {
+  const hit = apiCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > ttlMs) {
+    apiCache.delete(key);
+    return null;
+  }
+  return hit.data;
+}
+function cacheSet(key: string, data: any) {
+  if (apiCache.size > 200) {
+    const oldest = apiCache.keys().next().value;
+    if (oldest) apiCache.delete(oldest);
+  }
+  apiCache.set(key, { ts: Date.now(), data });
+}
+
 // Lightweight health endpoint for Cloudflare deployment verification.
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'NovelCraft API' });
@@ -179,7 +202,7 @@ async function searchPtwxz(keyword: string): Promise<any[]> {
   try {
     const gbkQuery = encodeToGbk(keyword);
     const searchUrl = `https://www.ptwxz.com/modules/article/search.php?searchtype=articlename&searchkey=${gbkQuery}`;
-    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 6000);
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 4000);
     const $ = cheerio.load(html);
     const results: any[] = [];
 
@@ -197,12 +220,12 @@ async function searchPtwxz(keyword: string): Promise<any[]> {
           id: 'ptwxz-exact-' + Math.random().toString(36).substring(2, 9),
           title,
           author,
-          category: '网络玄幻',
+          category: '网络小说',
           status: '完结/连载',
-          wordCount: '全本连载',
-          cover: cover || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          wordCount: '',
+          cover: cover || '',
           intro,
-          latestChapter: '点击查看最新章节',
+          latestChapter: '',
           sourceName: '飘天文学源',
           sourceUrl: catalogUrl,
         });
@@ -237,12 +260,12 @@ async function searchPtwxz(keyword: string): Promise<any[]> {
           id: 'ptwxz-' + Math.random().toString(36).substring(2, 9),
           title,
           author,
-          category: '网络文学',
+          category: '网络小说',
           status: status.includes('完') ? '完结' : '连载中',
-          wordCount: wordCount ? `${wordCount}` : '更新中',
-          cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          wordCount: normalizeWordCount(wordCount),
+          cover: '',
           intro: `飘天文学实时收录《${title}》，作者：${author}，最新章节：${latest}`,
-          latestChapter: latest || '查看最新章节',
+          latestChapter: cleanLatestChapter(latest),
           sourceName: '飘天文学源',
           sourceUrl: catalogUrl,
         });
@@ -261,7 +284,7 @@ async function searchBiquge(keyword: string): Promise<any[]> {
   try {
     const gbkQuery = encodeToGbk(keyword);
     const searchUrl = `https://www.biquge.tv/modules/article/search.php?searchkey=${gbkQuery}`;
-    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 6000);
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 4000);
     const $ = cheerio.load(html);
     const results: any[] = [];
 
@@ -287,12 +310,12 @@ async function searchBiquge(keyword: string): Promise<any[]> {
           id: 'bqg-' + Math.random().toString(36).substring(2, 9),
           title,
           author,
-          category: '热血玄幻',
+          category: '网络小说',
           status: status.includes('完') ? '完结' : '连载中',
-          wordCount: wordCount ? `${wordCount}` : '更新中',
-          cover: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&q=80',
+          wordCount: normalizeWordCount(wordCount),
+          cover: '',
           intro: `笔趣阁实时爬取《${title}》，作者：${author}，最新更新至：${latest}`,
-          latestChapter: latest || '查看最新章节',
+          latestChapter: cleanLatestChapter(latest),
           sourceName: '笔趣阁源',
           sourceUrl: catalogUrl,
         });
@@ -315,7 +338,7 @@ const TRENDING_BOOKS = [
     category: '东方玄幻 / 热血升级',
     status: '完结',
     wordCount: '532万字',
-    cover: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&q=80',
+    cover: '',
     intro: '这里是属于斗气的世界，没有花俏艳丽的魔法，有的，仅仅是繁衍到巅峰的斗气！“三十年河东，三十年河西，莫欺少年穷！”',
     latestChapter: '第一千六百二十四章 结束，也是一种开始（大结局）',
     sourceName: '飘天文学全本源',
@@ -341,7 +364,7 @@ const TRENDING_BOOKS = [
     category: '古典仙侠 / 江湖庙堂',
     status: '连载中',
     wordCount: '1100万字',
-    cover: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80',
+    cover: '',
     intro: '大千世界，无奇不有。我陈平安，唯有一剑，可搬山，倒海，降妖，镇魔，敕神，摘星，摧城，开天！',
     latestChapter: '第1180章 归去来兮',
     sourceName: '飘天文学镜像源',
@@ -354,7 +377,7 @@ const TRENDING_BOOKS = [
     category: '玄幻武侠 / 江湖史诗',
     status: '完结',
     wordCount: '460万字',
-    cover: 'https://images.unsplash.com/photo-1532012164546-f432f2e3edd4?w=300&q=80',
+    cover: '',
     intro: '有个白狐儿脸，佩双刀绣冬春雷，要做天下第一。湖底有老魁沉锁。北凉世子徐凤年，千里游历执刀北行！',
     latestChapter: '最终章 小二上酒（大结局）',
     sourceName: '飘天文学全本源',
@@ -367,7 +390,7 @@ const TRENDING_BOOKS = [
     category: '古典仙侠 / 浩瀚洪荒',
     status: '完结',
     wordCount: '630万字',
-    cover: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=300&q=80',
+    cover: '',
     intro: '冰冷与黑暗并存的宇宙深处，九具庞大的龙尸拉着一口青铜古棺，亘古长存。登天路，踏歌行，弹指遮天！',
     latestChapter: '第1822章 遮天后记',
     sourceName: '飘天文学全本源',
@@ -380,7 +403,7 @@ const TRENDING_BOOKS = [
     category: '西方奇幻 / 蒸汽朋克',
     status: '完结',
     wordCount: '446万字',
-    cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+    cover: '',
     intro: '伴随着蒸汽与机械的狂潮，神秘与愚弄的暗涌，周明瑞在一间满地狼藉的单身公寓中醒来，开启了愚者的序列神座...',
     latestChapter: '番外 旅者',
     sourceName: '飘天文学全本源',
@@ -393,7 +416,7 @@ const TRENDING_BOOKS = [
     category: '历史架空 / 幽默传奇',
     status: '完结',
     wordCount: '320万字',
-    cover: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=300&q=80',
+    cover: '',
     intro: '醒掌天下权，醉卧美人膝！年轻的销售经理林晚荣意外穿越到大华朝，阴差阳错成为了萧家大院里一名光荣的“家丁”...',
     latestChapter: '第602章 携美泛舟（大结局）',
     sourceName: '飘天文学全本源',
@@ -406,7 +429,7 @@ const TRENDING_BOOKS = [
     category: '都市伦理 / 经典长篇',
     status: '完结',
     wordCount: '134万字',
-    cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+    cover: '',
     intro: '都市长篇代表作。细腻讲述了在经历家庭生活风波后，主角在复杂纠葛的现实生活与道德伦理边缘逐步产生的心路历程。文笔细腻逼真，人物心理刻画入微。',
     latestChapter: '第489章 终章·圆满与释怀',
     sourceName: '百书屋全本源',
@@ -419,7 +442,7 @@ const TRENDING_BOOKS = [
     category: '社会纪实 / 情感小说',
     status: '完结',
     wordCount: '85万字',
-    cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+    cover: '',
     intro: '经典社会伦理小说合集完整版。讲述了主角白洁作为一名温婉知性的女教师，在家庭、学校与纷繁复杂的社会交往中所经历的爱恨纠葛与心理挣扎。',
     latestChapter: '第十八章 魅惑人间 下',
     sourceName: '百书屋典藏源',
@@ -432,7 +455,7 @@ const TRENDING_BOOKS = [
     category: '青春都市 / 成长心路',
     status: '完结',
     wordCount: '72万字',
-    cover: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&q=80',
+    cover: '',
     intro: '知名青春成长文学作品。刻画了青年阿宾在考入大学前后的青春骚动、人生困惑与情感萌芽，生动呈现了特定时代青年对于爱情与成熟的探寻。',
     latestChapter: '第52章 告别青葱岁月',
     sourceName: '百书屋典藏源',
@@ -445,7 +468,7 @@ const TRENDING_BOOKS = [
     category: '都市商战 / 传奇史诗',
     status: '完结',
     wordCount: '168万字',
-    cover: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=300&q=80',
+    cover: '',
     intro: '当代都市商海长篇传奇。主角侯龙涛从底层小职员起步，凭借过人的胆识、远见以及对复杂人性的洞察，在商场搏杀与权谋博弈中一步步登顶。',
     latestChapter: '第112章 金鳞腾空（大结局）',
     sourceName: '百书屋典藏源',
@@ -458,7 +481,7 @@ async function searchBaishuwu(keyword: string): Promise<any[]> {
   try {
     const { html, finalUrl } = await fetchWithEncoding(
       'https://www.baishuwu.com/search.html',
-      7000,
+      4000,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -485,17 +508,17 @@ async function searchBaishuwu(keyword: string): Promise<any[]> {
       const latest = $li.find('.s4 a').text().trim();
 
       const existing = byUrl.get(catalogUrl);
-      if (!existing || (latest && existing.latestChapter === '点击查看章节目录')) {
+      if (!existing || (latest && !existing.latestChapter)) {
         byUrl.set(catalogUrl, {
           id: 'bsw-' + Math.random().toString(36).substring(2, 9),
           title,
           author,
-          category: '都市伦理 / 典藏',
+          category: '网络小说',
           status: '完结/连载',
-          wordCount: '百书屋全本',
-          cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          wordCount: '',
+          cover: '',
           intro: `百书屋实时收录《${title}》，作者：${author}${latest ? `，最新章节：${latest}` : ''}`,
-          latestChapter: latest || '点击查看章节目录',
+          latestChapter: cleanLatestChapter(latest),
           sourceName: '百书屋源',
           sourceUrl: catalogUrl,
         });
@@ -512,7 +535,7 @@ async function searchBaishuwu(keyword: string): Promise<any[]> {
 async function searchYunshuzhai(keyword: string): Promise<any[]> {
   try {
     const searchUrl = `https://yunshuzhai.com/search/result.html?searchkey=${encodeURIComponent(keyword)}`;
-    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 7000);
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 4000);
     const $ = cheerio.load(html);
     const results: any[] = [];
 
@@ -536,10 +559,10 @@ async function searchYunshuzhai(keyword: string): Promise<any[]> {
         author,
         category,
         status: '全本/连载',
-        wordCount: '云书斋源',
-        cover: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&q=80',
+        wordCount: '',
+        cover: '',
         intro: `云书斋实时收录《${title}》，作者：${author}${latest ? `，最新：${latest}` : ''}`,
-        latestChapter: latest || '点击查看章节目录',
+        latestChapter: cleanLatestChapter(latest),
         sourceName: '云书斋源',
         sourceUrl: catalogUrl,
       });
@@ -556,7 +579,7 @@ async function searchDiyizhan(keyword: string): Promise<any[]> {
   try {
     const { html, finalUrl } = await fetchWithEncoding(
       'https://www.diyizhan.org/search/',
-      7000,
+      4000,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -576,6 +599,11 @@ async function searchDiyizhan(keyword: string): Promise<any[]> {
       if (!title || title.length < 2) return;
       const catalogUrl = new URL(`/index/${match[1]}/`, finalUrl).toString();
       if (seen.has(catalogUrl)) return;
+      // The search page also lists sidebar "hot books" when there is no
+      // match; drop anything whose title does not contain the keyword.
+      const containerTextEarly = $(el).closest('li, tr, div').text().replace(/\s+/g, ' ').trim();
+      const authorEarly = containerTextEarly.match(/作者[：:]\s*([^\s/]+)/)?.[1] || '网络作家';
+      if (!isRelevantToQuery(title, authorEarly, keyword)) return;
       seen.add(catalogUrl);
 
       const containerText = $(el).closest('li, tr, div').text().replace(/\s+/g, ' ').trim();
@@ -585,12 +613,12 @@ async function searchDiyizhan(keyword: string): Promise<any[]> {
         id: 'dyz-' + match[1],
         title,
         author: authorMatch?.[1] || '网络作家',
-        category: '伦理 / 热门连载',
+        category: '网络小说',
         status: '连载/完结',
-        wordCount: '第一站源',
-        cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+        wordCount: '',
+        cover: '',
         intro: `第一站实时收录《${title}》完整目录与原版正文`,
-        latestChapter: '点击查看章节目录',
+        latestChapter: '',
         sourceName: '第一站书源',
         sourceUrl: catalogUrl,
       });
@@ -606,7 +634,7 @@ async function searchDiyizhan(keyword: string): Promise<any[]> {
 async function searchKyankanshu(keyword: string): Promise<any[]> {
   try {
     const searchUrl = `https://www.kyankanshu.com/search/?keyword=${encodeURIComponent(keyword)}`;
-    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 7000);
+    const { html, finalUrl } = await fetchWithEncoding(searchUrl, 4000);
     const $ = cheerio.load(html);
     const results: any[] = [];
     const seen = new Set<string>();
@@ -620,18 +648,19 @@ async function searchKyankanshu(keyword: string): Promise<any[]> {
       if (!title || title.length < 2) return;
       const catalogUrl = new URL(`/info/${match[1]}_1/`, finalUrl).toString();
       if (seen.has(catalogUrl)) return;
+      if (!isRelevantToQuery(title, '网络作家', keyword)) return;
       seen.add(catalogUrl);
 
       results.push({
         id: 'ky-' + match[1],
         title,
         author: '网络作家',
-        category: '经典 / 伦理全本',
+        category: '网络小说',
         status: '全本/连载',
-        wordCount: '快眼书源',
-        cover: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&q=80',
+        wordCount: '',
+        cover: '',
         intro: `快眼看书实时收录《${title}》完整目录`,
-        latestChapter: '点击查看章节目录',
+        latestChapter: '',
         sourceName: '快眼书源',
         sourceUrl: catalogUrl,
       });
@@ -654,7 +683,7 @@ async function searchWebNovels(keyword: string): Promise<any[]> {
         'User-Agent': getRandomUserAgent(),
         'Accept-Language': 'zh-CN,zh;q=0.9',
       },
-      signal: AbortSignal.timeout(7000),
+      signal: AbortSignal.timeout(4000),
     });
     if (!res.ok) return [];
     const html = await res.text();
@@ -681,7 +710,13 @@ async function searchWebNovels(keyword: string): Promise<any[]> {
       if (!targetUrl || BLOCKED_DOMAINS.test(targetUrl)) return;
 
       let cleanTitle = titleRaw.split(/最新章节|章节列表|目录|全文免费阅读|_|--/)[0].replace(/[《》]/g, '').trim();
-      if (!cleanTitle) cleanTitle = cleanQ;
+      // Do not fall back to the query itself as the title: that fabricates
+      // a "match" for nonsense queries from generic results like "小说章节".
+      if (!cleanTitle) return;
+      // The web result must actually be about the queried book: require the
+      // keyword in the title, snippet, or URL, not just the words 章节/小说.
+      const webAuthor = snippet.match(/作\s*者[：:]\s*([^\s,，。]+)/)?.[1] || '网络作家';
+      if (!isRelevantToQuery(cleanTitle, webAuthor, cleanQ) && !titleRaw.toLowerCase().includes(cleanQ.toLowerCase()) && !snippet.toLowerCase().includes(cleanQ.toLowerCase())) return;
 
       if (
         /baishuwu|yunshuzhai|diyizhan|kyankanshu|kkddkk|kanxiaoshuo|axikin|yzwpo|lushuwu|biquge|piaotia|ptwxz|8tsw|69shu|youziks|yushuwu|shushuwu/i.test(targetUrl) ||
@@ -696,12 +731,12 @@ async function searchWebNovels(keyword: string): Promise<any[]> {
           id: 'web-' + Math.random().toString(36).substring(2, 9),
           title: cleanTitle,
           author: snippet.match(/作\s*者[：:]\s*([^\s,，。]+)/)?.[1] || '网络作家',
-          category: '网络全本检索',
+          category: '网络小说',
           status: snippet.includes('完结') || snippet.includes('全本') ? '完结' : '连载中',
-          wordCount: '网络原版',
-          cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+          wordCount: '',
+          cover: '',
           intro: snippet || `全网实时爬取《${cleanTitle}》章节列表与原版正文`,
-          latestChapter: '点击查看章节目录',
+          latestChapter: '',
           sourceName: `全网嗅探 (${domain})`,
           sourceUrl: targetUrl,
         });
@@ -713,6 +748,55 @@ async function searchWebNovels(keyword: string): Promise<any[]> {
     console.log('searchWebNovels notice:', err.message);
     return [];
   }
+}
+
+// Relevance guard: a scraped result is only a match if its title/author
+// actually contains the query (or vice-versa for short titles).
+// Without this, sources that render sidebar "hot books" on an empty
+// search page (diyizhan, kyankanshu) or a generic web search
+// (searchWebNovels) return 8-10 completely unrelated books for a
+// nonsense query like "zxqv123456789".
+function isRelevantToQuery(title: string, author: string, query: string): boolean {
+  const q = (query || '').replace(/[《》]/g, '').trim().toLowerCase();
+  if (!q) return true;
+  const t = (title || '').replace(/[《》]/g, '').trim().toLowerCase();
+  const a = (author || '').replace(/[《》]/g, '').trim().toLowerCase();
+  if (!t || t.length < 1) return false;
+  if (/^(小说章节|小说最原始完整章节|章节列表|目录|小说)$/.test(t)) return false;
+  if (t.includes(q) || a.includes(q) || q.includes(t)) return true;
+  return false;
+}
+
+// Normalize a scraped "word count" value. Source tables often return a
+// raw "48073K" (thousand chars) that is implausible as a word count
+// (>2000万字) or a source label misused as a count ("第一站源").
+// Return '' so the UI hides the field instead of showing a wrong number.
+function normalizeWordCount(raw: string): string {
+  const t = (raw || '').trim();
+  if (!t) return '';
+  if (/万字/.test(t)) return t;
+  const kMatch = t.match(/^(\d+(?:\.\d+)?)K$/i);
+  if (kMatch) {
+    const n = parseFloat(kMatch[1]);
+    if (n > 20000 || n <= 0) return '';
+    return `${Math.round(n / 10)}万字`;
+  }
+  if (/^\d+$/.test(t)) {
+    const n = parseInt(t, 10);
+    if (n > 20000000 || n <= 0) return '';
+    return `${Math.round(n / 10000)}万字`;
+  }
+  return '';
+}
+
+// Clean a scraped "latest chapter" string. Drops garbled prefixes like
+// "《：斗帝之路》手游·角色传记" and placeholder copy; returns '' so the
+// UI hides the line instead of showing junk.
+function cleanLatestChapter(raw: string): string {
+  const t = (raw || '').replace(/^《[：:]/, '').replace(/^[《:：\s]+/, '').trim();
+  if (!t || t.length < 2) return '';
+  if (/手游|角色传记|点击查看章节目录|查看最新章节/.test(t)) return '';
+  return t;
 }
 
 // Result ranking helper: exact title match ranks #1, prefix match #2, shortest title #3
@@ -762,6 +846,21 @@ app.get('/api/search', async (req, res) => {
   const source = (req.query.source as string || 'aggregate');
 
   if (!query) {
+    // Source filter previously did nothing on the homepage: empty query
+    // always returned all 11 trending books regardless of the selected
+    // source. Filter the preset list by source so the buttons work.
+    // Note: no trending book is from 笔趣阁, so bqg correctly returns
+    // an empty list here (frontend shows the empty state) rather than
+    // pretending to filter.
+    if (source === 'ptwxz') {
+      return res.json({ books: TRENDING_BOOKS.filter((b) => (b.sourceName || '').includes('飘天')), isPreset: true });
+    }
+    if (source === 'ethic') {
+      return res.json({ books: TRENDING_BOOKS.filter((b) => (b.sourceName || '').includes('百书屋')), isPreset: true });
+    }
+    if (source === 'bqg') {
+      return res.json({ books: TRENDING_BOOKS.filter((b) => (b.sourceName || '').includes('笔趣阁')), isPreset: true });
+    }
     return res.json({ books: TRENDING_BOOKS, isPreset: true });
   }
 
@@ -792,7 +891,7 @@ app.get('/api/search', async (req, res) => {
             category: '网络网址直转',
             status: '在线解析',
             wordCount: '网页直连',
-            cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+            cover: '',
             intro: `已探测解析网络链接：${finalUrl}，点击即可立即进入纯净阅读模式或提取完整全书。`,
             latestChapter: '点击进入阅读/解析目录',
             sourceName: '单链直转阅读',
@@ -813,7 +912,7 @@ app.get('/api/search', async (req, res) => {
             category: '网络网址直转',
             status: '待解析',
             wordCount: '点击解析',
-            cover: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+            cover: '',
             intro: `目标网址：${normalizedDirectUrl}，点击进入阅读或提取章节。`,
             latestChapter: '点击进入',
             sourceName: '单链直转',
@@ -828,6 +927,10 @@ app.get('/api/search', async (req, res) => {
   }
 
   const cleanQ = query.replace(/(小说|全集|最新|无删减|完结|txt|TXT|全文|目录)/g, '').replace(/[《》]/g, '').trim() || query;
+
+  const searchCacheKey = `search:${source}:${cleanQ.toLowerCase()}`;
+  const cachedSearch = cacheGet(searchCacheKey, 5 * 60 * 1000);
+  if (cachedSearch) return res.json(cachedSearch);
 
   // Local preset exact matches
   const localMatches = TRENDING_BOOKS.filter(
@@ -871,7 +974,7 @@ app.get('/api/search', async (req, res) => {
     }
 
     // Invoke universal web search if direct sources returned fewer than 3 results
-    if (crawledResults.length < 3) {
+    if (crawledResults.length === 0) {
       const webResults = await searchWebNovels(cleanQ);
       crawledResults.push(...webResults);
     }
@@ -880,7 +983,11 @@ app.get('/api/search', async (req, res) => {
   }
 
   // Combine and deduplicate by sourceUrl (so same book from different working sources remains selectable!)
-  const combined = [...localMatches, ...crawledResults];
+  // Backstop relevance filter: even if a source scraper returns sidebar
+  // recommendations, only titles/authors matching the query reach the user.
+  const combined = [...localMatches, ...crawledResults].filter((b) =>
+    isRelevantToQuery(b.title, b.author, cleanQ)
+  );
   const uniqueMap = new Map();
   combined.forEach(b => {
     const key = `${(b.sourceUrl || '').trim() || `${b.title.trim()}-${b.author.trim()}`}`;
@@ -891,11 +998,13 @@ app.get('/api/search', async (req, res) => {
 
   const ranked = rankResults(Array.from(uniqueMap.values()), cleanQ);
 
-  res.json({
+  const searchResult = {
     books: ranked,
     count: ranked.length,
     isPreset: false,
-  });
+  };
+  cacheSet(searchCacheKey, searchResult);
+  res.json(searchResult);
 });
 
 // 3. Get Book Catalog & Chapters (By URL or ID) with Full Pagination & Numerical Ordering
@@ -915,6 +1024,10 @@ app.get('/api/book-detail', async (req, res) => {
   if (!targetUrl) {
     return res.status(400).json({ error: '请提供小说目录链接或有效书籍ID' });
   }
+
+  const detailCacheKey = `detail:${targetUrl}`;
+  const cachedDetail = cacheGet(detailCacheKey, 10 * 60 * 1000);
+  if (cachedDetail) return res.json(cachedDetail);
 
   try {
     targetUrl = normalizeCrawlUrl(targetUrl);
@@ -954,7 +1067,7 @@ app.get('/api/book-detail', async (req, res) => {
     }
 
     // Extract book title
-    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').trim() ||
+    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').replace(/最新章节.*$/, '').replace(/全文阅读.*$/, '').trim() ||
                   $('.book-name, .info h1, .title, meta[property="og:novel:book_name"]').attr('content') ||
                   $('title').text().split(/最新章节|章节列表|章节目录|无弹窗|,|_|-/)[0].replace(/[《》]/g, '').trim() ||
                   '精选作品';
@@ -1089,6 +1202,18 @@ app.get('/api/book-detail', async (req, res) => {
 
         if (!isLikelyChapterLink(fullUrl, pageUrl, chTitle, inContainer)) return;
 
+        // Drop obvious non-chapter junk the source site mixes into the
+        // catalog (ads, vote-begging, notices, "my new book" plugs).
+        // Only applies when the title is not a real numbered chapter.
+        const junkTitle = chTitle.replace(/\s+/g, '');
+        if (
+          !/^第/.test(chTitle) &&
+          /^(广告|求月票|求保底月票|通知|更新通知|本月更新|第一！|月底之事.*|码字间隙.*|.*vip订阅群|.*感言|结束语.*|我的新书.*|.*新书.*已上传|.*新书.*上传|求月票.*|第七段|第九段|第一轮.*|第二轮|第一重.*|第二层|第三|第三层)$/.test(junkTitle)
+        ) {
+          return;
+        }
+        if (/^第\s*[零〇一二两三四五六七八九十百千万\d]+\s*[章回节集部篇卷]\s*广告$/.test(chTitle)) return;
+
         if (!uniqueChapterMap.has(fullUrl)) {
           const chNum = extractChapterNumber(chTitle);
           uniqueChapterMap.set(fullUrl, {
@@ -1118,8 +1243,21 @@ app.get('/api/book-detail', async (req, res) => {
       rawChapters.sort((a, b) => a.pageOrder - b.pageOrder);
     }
 
+    // Drop exact duplicates (same number + same normalized title) that
+    // come from overlapping catalog pagination pages. Do NOT dedup by
+    // number alone: 上/中/下 splits and per-volume restarts share a
+    // number but are different content (verified: 雪中 "第一章 小二上酒"
+    // vs "第一章 新的江湖" are different chapters).
+    const seenChapterKeys = new Set<string>();
+    const dedupedChapters = rawChapters.filter((c) => {
+      const key = `${c.chapterNumber}||${c.title.replace(/\s+/g, '')}`;
+      if (seenChapterKeys.has(key)) return false;
+      seenChapterKeys.add(key);
+      return true;
+    });
+
     // Re-index sequentially from 1 to N
-    const chapters = rawChapters.map((c, index) => ({
+    const chapters = dedupedChapters.map((c, index) => ({
       index: index + 1,
       title: c.title,
       url: c.url,
@@ -1134,17 +1272,19 @@ app.get('/api/book-detail', async (req, res) => {
       });
     }
 
-    res.json({
+    const detailResult = {
       book: {
         title,
         author,
         intro,
-        cover: cover || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+        cover: cover || '',
         sourceUrl: finalUrl,
         chapters,
         totalChapters: chapters.length,
       }
-    });
+    };
+    cacheSet(detailCacheKey, detailResult);
+    res.json(detailResult);
   } catch (err: any) {
     console.error('Crawl book detail error:', err);
     res.status(500).json({ error: `抓取小说目录失败: ${err.message || '网络连接超时或目标反爬拦截'}` });
@@ -1191,6 +1331,10 @@ app.get('/api/chapter-content', async (req, res) => {
     return res.status(400).json({ error: '请提供章节URL链接' });
   }
 
+  const chapterCacheKey = `chapter:${targetUrl}`;
+  const cachedChapter = cacheGet(chapterCacheKey, 30 * 60 * 1000);
+  if (cachedChapter) return res.json(cachedChapter);
+
   try {
     const initialRes = await fetchWithEncoding(targetUrl, 10000);
     let currentUrl = initialRes.finalUrl;
@@ -1210,6 +1354,9 @@ app.get('/api/chapter-content', async (req, res) => {
     } else {
       title = current$('title').text().split(/第\d+页|最新章节|章节列表|_|-/)[0].trim() || '章节正文';
     }
+    // Strip empty trailing parentheses left by the source site, e.g.
+    // "第一章 陨落的天才()" -> "第一章 陨落的天才".
+    title = title.replace(/\s*\(\s*\)\s*$/, '').replace(/\s*（\s*）\s*$/, '').trim();
 
     const candidates = [
       'article.reading-container',
@@ -1236,24 +1383,53 @@ app.get('/api/chapter-content', async (req, res) => {
     ];
 
     // Helper: Extract content from HTML string without mutating Cheerio state
+    // Resolves relative image URLs to absolute ones first, so image-based
+    // chapters survive formatNovelText instead of becoming empty text.
+    const resolveImages = ($ctx: cheerio.CheerioAPI, scope: cheerio.Cheerio<any>) => {
+      scope.find('img').each((_, img) => {
+        const $img = $ctx(img);
+        const rawSrc =
+          $img.attr('data-original') || $img.attr('data-src') || $img.attr('data-lazy-src') || $img.attr('src') || '';
+        if (!rawSrc.trim() || rawSrc.startsWith('data:')) {
+          $img.remove();
+          return;
+        }
+        // Drop 1x1 tracking pixels and obvious ad / logo images.
+        const w = $img.attr('width');
+        const h = $img.attr('height');
+        if ((w === '1' && h === '1') || /1x1|tracking|pixel\.gif/i.test(rawSrc)) {
+          $img.remove();
+          return;
+        }
+        try {
+          $img.attr('src', new URL(rawSrc, currentUrl).toString());
+        } catch {
+          $img.remove();
+        }
+      });
+    };
     const extractContentText = (htmlStr: string): string => {
       const $ctx = cheerio.load(htmlStr);
       let rawHtml = '';
       for (const selector of candidates) {
         const match = $ctx(selector);
-        if (match.length > 0 && match.text().trim().length > 60) {
+        // Accept a container that is image-only as well: text length alone
+        // would reject a chapter whose "text" is scanned-page images.
+        if (match.length > 0 && (match.text().trim().length > 60 || match.find('img').length > 0)) {
           match.find('script, style, iframe, button, select, noscript, .read_btn, .ad, .advertisement, .ads, .chapter-nav, .page-nav').remove();
+          resolveImages($ctx, match);
           rawHtml = match.html() || '';
           break;
         }
       }
 
-      if (!rawHtml || rawHtml.length < 60) {
+      if (!rawHtml || (rawHtml.length < 60 && !/\[IMAGE:/.test(rawHtml) && !$ctx('body').find('img').length)) {
         $ctx('script, style, a, table, button, select, noscript, .toplink, .bottem, .read_tip, h1, h2, h3, .header, .footer, .read_btn').remove();
-        let bodyText = $ctx('body').text();
-        bodyText = bodyText.replace(/选择背景颜色[^\n]*/g, '').replace(/选择字体大小[^\n]*/g, '');
-        bodyText = bodyText.replace(/[\u00a0\s]{4,}/g, '\n\n');
-        rawHtml = bodyText;
+        resolveImages($ctx, $ctx('body'));
+        // Use HTML (not .text()) so <img> markers survive the fallback too.
+        let bodyHtml = $ctx('body').html() || '';
+        bodyHtml = bodyHtml.replace(/选择背景颜色[^\n]*/g, '').replace(/选择字体大小[^\n]*/g, '');
+        rawHtml = bodyHtml;
       }
 
       return formatNovelText(rawHtml);
@@ -1348,15 +1524,20 @@ app.get('/api/chapter-content', async (req, res) => {
       .replace(/本章未完，点击下一页继续阅读/g, '')
       .replace(/请点击下一页继续阅读/g, '')
       .replace(/一秒记住.*免费阅读！/g, '')
+      // Strip a trailing empty "()" on the first content line, e.g.
+      // "第一章 陨落的天才()" left by the source site.
+      .replace(/^　　([^\n]*?)\(\)(\n|$)/, '　　$1$2')
       .trim();
 
-    res.json({
+    const chapterResult = {
       title,
       content: fullChapterText,
       wordCount: fullChapterText.length,
       subpageCount,
       url: initialRes.finalUrl,
-    });
+    };
+    cacheSet(chapterCacheKey, chapterResult);
+    res.json(chapterResult);
   } catch (err: any) {
     console.error('Fetch chapter content error:', err);
     res.status(502).json({ error: `章节原版内容获取失败: ${err.message || '网络连接异常或被源站拦截'}。请尝试刷新或更换其他书源。` });

@@ -64,15 +64,22 @@ export const Bookshelf: React.FC<BookshelfProps> = ({
           >
             <div className="flex gap-3.5">
               <div className="w-20 h-28 shrink-0 rounded-lg overflow-hidden bg-stone-100 dark:bg-stone-800 shadow-sm border border-stone-200/60 dark:border-stone-700/60">
-                <img
-                  src={novel.cover}
-                  alt={novel.title}
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
-                />
+                {novel.cover ? (
+                  <img
+                    src={novel.cover}
+                    alt={novel.title}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-gradient-to-br from-amber-700 to-stone-900 text-amber-50">
+                    <BookOpen className="w-5 h-5 mb-1 text-amber-300/80" />
+                    <span className="text-[11px] font-serif font-bold line-clamp-2 leading-tight">{novel.title}</span>
+                  </div>
+                )}
               </div>
 
               <div className="flex-1 min-w-0">

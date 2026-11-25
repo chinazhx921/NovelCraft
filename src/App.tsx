@@ -20,8 +20,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'search' | 'urlCrawler' | 'bookshelf' | 'deploy'>('search');
   const [books, setBooks] = useState<Novel[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSource, setActiveSource] = useState('aggregate');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
 
   // Modals & Interactive Views
   const [selectedNovel, setSelectedNovel] = useState<Novel | null>(null);
@@ -63,14 +66,71 @@ export default function App() {
     }
   }, [isDark]);
 
-  // Initial load: fetch pre-seeded trending novels
+  // Initial load: restore a shared book / search from the URL hash when
+  // present (so a detail link survives refresh and sharing); otherwise
+  // fetch pre-seeded trending novels.
   useEffect(() => {
+    try {
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      const bookUrl = hash.get('book');
+      const q = hash.get('q');
+      if (bookUrl) {
+        const src = hash.get('source') || activeSource;
+        fetch(`/api/book-detail?url=${encodeURIComponent(bookUrl)}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.book?.title) {
+              setSelectedNovel({
+                id: 'hash-' + Math.random().toString(36).substring(2, 9),
+                title: data.book.title,
+                author: data.book.author || '网络作家',
+                category: '网络小说',
+                status: '连载/完结',
+                cover: data.book.cover || '',
+                intro: data.book.intro || '',
+                sourceName: '分享链接',
+                sourceUrl: data.book.sourceUrl || bookUrl,
+                chapters: data.book.chapters || [],
+                totalChapters: data.book.totalChapters || 0,
+              });
+            }
+          })
+          .catch(() => {});
+        fetchBooks(q || '', src);
+        return;
+      }
+      if (q) {
+        fetchBooks(q, hash.get('source') || activeSource);
+        return;
+      }
+    } catch {}
     fetchBooks('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the URL hash in sync so a book can be shared / bookmarked and a
+  // search survives refresh. Uses replaceState so it does not add history
+  // entries or trigger a reload.
+  useEffect(() => {
+    try {
+      if (selectedNovel?.sourceUrl) {
+        window.history.replaceState(null, '', `#book=${encodeURIComponent(selectedNovel.sourceUrl)}`);
+      } else if (!readerState && !selectedNovel && searchQuery) {
+        const params = new URLSearchParams();
+        params.set('q', searchQuery);
+        params.set('source', activeSource);
+        window.history.replaceState(null, '', `#${params.toString()}`);
+      } else if (!readerState && !selectedNovel && !searchQuery) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    } catch {}
+  }, [selectedNovel, readerState, searchQuery, activeSource]);
 
   const fetchBooks = async (query: string, source = activeSource) => {
     setLoading(true);
     setSearchQuery(query);
+    setSearchError(null);
+    setPage(1);
     try {
       const params = new URLSearchParams();
       if (query) params.set('q', query);
@@ -88,6 +148,10 @@ export default function App() {
       }
     } catch (err) {
       console.error('Search error:', err);
+      // Previously the failure was only console.error: the user kept
+      // seeing stale results (or an empty list) with no explanation.
+      setBooks([]);
+      setSearchError('搜索失败，源站可能超时或不可用，请稍后重试或切换书源。');
     } finally {
       setLoading(false);
     }
@@ -159,6 +223,12 @@ export default function App() {
         onBack={() => setReaderState(null)}
         onSaveProgress={handleSaveProgress}
         onTriggerDownload={(novel) => {
+          // Previously this only setSelectedNovel while the early return
+          // above skipped rendering all modals, so the download button
+          // in the reader did nothing (and the modal popped up
+          // unexpectedly after going back). Exit the reader first so
+          // the detail modal — where range/format are chosen — actually shows.
+          setReaderState(null);
           setSelectedNovel(novel);
         }}
       />
@@ -213,6 +283,16 @@ export default function App() {
                   <Loader2 className="w-8 h-8 animate-spin text-amber-600 mb-3" />
                   <p>正在全网多节点抓取解析小说目录...</p>
                 </div>
+              ) : searchError ? (
+                <div className="py-20 text-center space-y-3">
+                  <p className="text-red-600 dark:text-red-400 text-sm font-medium">{searchError}</p>
+                  <button
+                    onClick={() => fetchBooks(searchQuery, activeSource)}
+                    className="px-4 py-2 bg-amber-600 text-white text-xs font-semibold rounded-lg shadow-sm"
+                  >
+                    重新搜索
+                  </button>
+                </div>
               ) : books.length === 0 ? (
                 <div className="py-20 text-center space-y-3">
                   <p className="text-stone-500 text-sm">
@@ -226,18 +306,47 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {books.map((novel) => (
-                    <NovelCard
-                      key={novel.id}
-                      novel={novel}
-                      onSelect={(n) => setSelectedNovel(n)}
-                      onRead={(n) => setSelectedNovel(n)}
-                      onToggleBookshelf={handleToggleBookshelf}
-                      isBookmarked={isBookmarked(novel)}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {books.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((novel) => (
+                      <NovelCard
+                        key={novel.id}
+                        novel={novel}
+                        onSelect={(n) => setSelectedNovel(n)}
+                        onRead={(n) => setSelectedNovel(n)}
+                        onToggleBookshelf={handleToggleBookshelf}
+                        isBookmarked={isBookmarked(novel)}
+                      />
+                    ))}
+                  </div>
+                  {books.length > PAGE_SIZE && (
+                    <div className="mt-6 flex items-center justify-center gap-3 text-xs">
+                      <button
+                        disabled={page <= 1}
+                        onClick={() => {
+                          setPage((p) => Math.max(1, p - 1));
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-3.5 py-2 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40"
+                      >
+                        上一页
+                      </button>
+                      <span className="text-stone-500 font-mono">
+                        第 {page} / {Math.ceil(books.length / PAGE_SIZE)} 页
+                      </span>
+                      <button
+                        disabled={page >= Math.ceil(books.length / PAGE_SIZE)}
+                        onClick={() => {
+                          setPage((p) => Math.min(Math.ceil(books.length / PAGE_SIZE), p + 1));
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="px-3.5 py-2 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40"
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -257,7 +366,16 @@ export default function App() {
           <Bookshelf
             books={bookshelf}
             onSelect={(n) => setSelectedNovel(n)}
-            onRead={(n, chIdx) => setSelectedNovel({ ...n, lastReadChapterIndex: chIdx })}
+            onRead={(n, chIdx) => {
+              // If the catalog is already loaded, go straight to the reader.
+              // Otherwise open the detail modal first so the catalog can load;
+              // opening the reader without chapters would fail to fetch content.
+              if (n.chapters && n.chapters.length > 0) {
+                setReaderState({ novel: n, chapterIndex: chIdx });
+              } else {
+                setSelectedNovel({ ...n, lastReadChapterIndex: chIdx });
+              }
+            }}
             onRemove={(id) => handleToggleBookshelf({ id } as any)}
             onExplore={() => setActiveTab('search')}
           />

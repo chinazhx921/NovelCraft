@@ -18,6 +18,7 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
   onOpenReader,
 }) => {
   const [downloadedCount, setDownloadedCount] = useState(0);
+  const [failedCount, setFailedCount] = useState(0);
   const [currentChapterTitle, setCurrentChapterTitle] = useState('');
   const [status, setStatus] = useState<'downloading' | 'paused' | 'completed' | 'cancelled' | 'error'>('downloading');
   const [logs, setLogs] = useState<string[]>([]);
@@ -25,6 +26,7 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
   const [totalWords, setTotalWords] = useState(0);
 
   const downloadedDataRef = useRef<Map<number, { title: string; content: string }>>(new Map());
+  const failedCountRef = useRef(0);
   const isPausedRef = useRef(false);
   const isCancelledRef = useRef(false);
 
@@ -35,6 +37,8 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
     let isMounted = true;
     isPausedRef.current = false;
     isCancelledRef.current = false;
+    failedCountRef.current = 0;
+    setFailedCount(0);
 
     const runBatchDownload = async () => {
       setStatus('downloading');
@@ -66,18 +70,29 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
               const res = await fetch(
                 `/api/chapter-content?url=${encodeURIComponent(ch.url)}&chapterTitle=${encodeURIComponent(ch.title)}`
               );
+              // Previously res.ok was never checked: a 502 error body
+              // {error: ...} has no content, so the chapter was silently
+              // counted as success with an empty-content placeholder.
+              if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.error || `HTTP ${res.status}`);
+              }
               const data = await res.json();
               chapterText = data.content || '';
             } else {
               const res = await fetch(
                 `/api/chapter-content?bookId=${encodeURIComponent(novel.id)}&chapterIndex=${ch.index}&chapterTitle=${encodeURIComponent(ch.title)}`
               );
+              if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.error || `HTTP ${res.status}`);
+              }
               const data = await res.json();
               chapterText = data.content || '';
             }
 
             if (!chapterText) {
-              chapterText = '（本章节内容获取为空或暂时缺失）';
+              throw new Error('正文为空');
             }
 
             downloadedDataRef.current.set(ch.index, {
@@ -99,12 +114,14 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
             console.error(`Error scraping chapter ${ch.index}:`, err);
             downloadedDataRef.current.set(ch.index, {
               title: ch.title,
-              content: `　　（本章节爬取超时或网络波动，原章节标题：${ch.title}）`,
+              content: `　　（本章节爬取失败：${err?.message || '网络波动'}，原章节标题：${ch.title}）`,
             });
             if (isMounted) {
+              failedCountRef.current += 1;
+              setFailedCount((prev) => prev + 1);
               setDownloadedCount((prev) => prev + 1);
               setLogs((prev) => [
-                `⚠️ 章节 [${ch.index}] 采集异常，已自动跳过或记录`,
+                `⚠️ 章节 [${ch.index}] 采集失败：${err?.message || '网络异常'}，已用占位符替代`,
                 ...prev.slice(0, 7),
               ]);
             }
@@ -136,6 +153,14 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
       const url = URL.createObjectURL(blob);
       setTxtBlobUrl(url);
       setStatus('completed');
+      if (isMounted) {
+        setLogs((prev) => [
+          failedCountRef.current > 0
+            ? `⚠️ 完成：其中 ${failedCountRef.current} 章抓取失败，已用占位符替代，请检查 TXT 后重试失败章节`
+            : '✓ 全部章节采集成功',
+          ...prev.slice(0, 7),
+        ]);
+      }
 
       // Auto trigger download
       triggerBrowserDownload(url, `${novel.title}_${novel.author}.txt`);
@@ -201,7 +226,9 @@ export const DownloaderModal: React.FC<DownloaderModalProps> = ({
           <div className="flex justify-between items-center text-xs">
             <span className="font-medium text-stone-700 dark:text-stone-300">
               {status === 'completed'
-                ? '全部章节已完成净化并打包'
+                ? failedCount > 0
+                  ? `已打包，但其中 ${failedCount} 章抓取失败（已用占位符替代）`
+                  : '全部章节已完成净化并打包'
                 : `正在采集: ${currentChapterTitle || '准备中...'}`}
             </span>
             <span className="font-mono tabular-nums font-bold text-amber-600 dark:text-amber-400">
@@ -341,7 +368,8 @@ function assembleTxtFile(
     }
 
     parts.push(headerLine);
-    parts.push(content);
+    // TXT cannot embed images: keep the image URL so the reader can open it.
+    parts.push(content.replace(/\[IMAGE:([^\]]+)\]/g, '【章节图片：$1】'));
     parts.push('\n');
   });
 

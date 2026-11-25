@@ -52,7 +52,7 @@ export const CustomUrlCrawler: React.FC<CustomUrlCrawlerProps> = ({ onParsedBook
         category: '自定义网络抓取',
         status: '连载/完结',
         wordCount: `${data.book.totalChapters || 0} 章节`,
-        cover: data.book.cover || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80',
+        cover: data.book.cover || '',
         intro: data.book.intro || '通过单链万能爬虫抓取解析的小说',
         sourceName: '万能单链爬虫',
         sourceUrl: data.book.sourceUrl || normalizedUrl,

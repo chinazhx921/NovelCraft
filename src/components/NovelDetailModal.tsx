@@ -159,15 +159,22 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
           {/* Top Novel Summary Card */}
           <div className="flex flex-col sm:flex-row gap-5 p-4 rounded-xl bg-stone-50 dark:bg-stone-800/50 border border-stone-200/80 dark:border-stone-800">
             <div className="w-24 h-32 shrink-0 rounded-lg overflow-hidden bg-stone-200 dark:bg-stone-700 shadow-sm mx-auto sm:mx-0">
-              <img
-                src={novel.cover}
-                alt={novel.title}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
+              {novel.cover ? (
+                <img
+                  src={novel.cover}
+                  alt={novel.title}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-gradient-to-br from-amber-700 to-stone-900 text-amber-50">
+                  <BookOpen className="w-6 h-6 mb-1 text-amber-300/80" />
+                  <span className="text-xs font-serif font-bold line-clamp-2 leading-tight">{novel.title}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex-1 min-w-0">
@@ -196,7 +203,11 @@ export const NovelDetailModal: React.FC<NovelDetailModalProps> = ({
                   className="px-3.5 py-1.5 text-xs font-medium text-stone-800 dark:text-stone-200 bg-white dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700 border border-stone-300 dark:border-stone-600 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
                 >
                   <BookOpen className="w-3.5 h-3.5 text-amber-600" />
-                  <span>从第一章开始阅读</span>
+                  <span>
+                    {novel.lastReadChapterIndex && novel.lastReadChapterIndex > 1
+                      ? `继续阅读： 第${novel.lastReadChapterIndex}章`
+                      : '从第一章开始阅读'}
+                  </span>
                 </button>
 
                 <button
