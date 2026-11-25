@@ -185,6 +185,55 @@ async function fetchWithEncoding(
   }
 }
 
+// Google Translate proxy URL for a page, keeping the text in Chinese
+// (_x_tr_tl=zh-CN). Used ONLY as a fallback when the source site returns
+// 520/403/503 to Cloudflare Workers: baishuwu.com and kyankanshu.com both
+// block Worker egress IPs with HTTP 520, while Google fetches the same
+// pages fine (verified: translate.goog returns the full catalog).
+function toTranslateUrl(rawUrl: string): string | null {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    const dashedHost = u.hostname.replace(/\./g, '-');
+    const path = u.pathname + (u.search || '');
+    return `https://${dashedHost}.translate.goog${path}?_x_tr_sl=auto&_x_tr_tl=zh-CN&_x_tr_hl=zh-CN`;
+  } catch {
+    return null;
+  }
+}
+
+function isBotBlockError(err: any): boolean {
+  const msg = `${err?.message || ''} ${err?.cause?.message || ''}`.toLowerCase();
+  return (
+    /http 520/.test(msg) ||
+    /http 403/.test(msg) ||
+    /http 503/.test(msg) ||
+    /人机验证/.test(msg) ||
+    /fetch failed/.test(msg)
+  );
+}
+
+// Fetch with a translate-proxy fallback for bot-blocked source sites.
+// Direct fetch first (fast, preserves original URLs); only on a 520/403/
+// 503 bot block do we retry via translate.goog, whose HTML keeps the
+// chapter links (rewritten to translate.goog) and the Chinese text.
+async function fetchWithTranslateFallback(
+  rawUrl: string,
+  timeoutMs = 10000,
+  extraInit?: { method?: string; headers?: Record<string, string>; body?: string }
+): Promise<{ html: string; finalUrl: string }> {
+  try {
+    return await fetchWithEncoding(rawUrl, timeoutMs, extraInit);
+  } catch (err: any) {
+    if (!isBotBlockError(err)) throw err;
+    const proxyUrl = toTranslateUrl(rawUrl);
+    if (!proxyUrl) throw err;
+    console.log(`Direct fetch blocked (${err.message}), retrying via translate proxy for ${rawUrl}`);
+    // The proxy itself may also be slow; give it the same timeout.
+    return await fetchWithEncoding(proxyUrl, timeoutMs, extraInit, false);
+  }
+}
+
 // Helper: Convert string to GBK URL encoding (e.g. %B6%B7%C2%DE%B4%F3%C2%BD)
 function encodeToGbk(str: string): string {
   try {
@@ -432,8 +481,13 @@ const TRENDING_BOOKS = [
     cover: '',
     intro: '都市长篇代表作。细腻讲述了在经历家庭生活风波后，主角在复杂纠葛的现实生活与道德伦理边缘逐步产生的心路历程。文笔细腻逼真，人物心理刻画入微。',
     latestChapter: '第489章 终章·圆满与释怀',
-    sourceName: '百书屋全本源',
-    sourceUrl: 'https://www.baishuwu.com/info/188122/',
+    // NOTE: baishuwu.com returns HTTP 520 to Cloudflare Workers (bot
+    // protection on Worker egress IPs) while working from a normal server,
+    // so the homepage card 520'd on the live site. 第一站 is the same
+    // book and reachable from Workers; keep the baishuwu URL as the
+    // fallback in book-detail instead.
+    sourceName: '第一站书源',
+    sourceUrl: 'https://www.diyizhan.org/index/1531/',
   },
   {
     id: 'bsw-15713',
@@ -445,8 +499,8 @@ const TRENDING_BOOKS = [
     cover: '',
     intro: '经典社会伦理小说合集完整版。讲述了主角白洁作为一名温婉知性的女教师，在家庭、学校与纷繁复杂的社会交往中所经历的爱恨纠葛与心理挣扎。',
     latestChapter: '第十八章 魅惑人间 下',
-    sourceName: '百书屋典藏源',
-    sourceUrl: 'https://www.baishuwu.com/info/15713/',
+    sourceName: '第一站书源',
+    sourceUrl: 'https://www.diyizhan.org/index/1080/',
   },
   {
     id: 'bsw-256455',
@@ -458,8 +512,10 @@ const TRENDING_BOOKS = [
     cover: '',
     intro: '知名青春成长文学作品。刻画了青年阿宾在考入大学前后的青春骚动、人生困惑与情感萌芽，生动呈现了特定时代青年对于爱情与成熟的探寻。',
     latestChapter: '第52章 告别青葱岁月',
-    sourceName: '百书屋典藏源',
-    sourceUrl: 'https://www.baishuwu.com/info/256455/',
+    // Same 520 reason as 母上攻略: use the 云书斋 mirror, reachable
+    // from Workers (76 chapters, clean titles).
+    sourceName: '云书斋源',
+    sourceUrl: 'https://yunshuzhai.com/book/37810/list/',
   },
   {
     id: 'bsw-18009',
@@ -1037,7 +1093,7 @@ app.get('/api/book-detail', async (req, res) => {
       targetUrl = targetUrl.replace('/bookinfo/', '/html/').replace('.html', '/index.html');
     }
 
-    const initialRes = await fetchWithEncoding(targetUrl, 10000);
+    const initialRes = await fetchWithTranslateFallback(targetUrl, 10000);
     const originalFinalUrl = initialRes.finalUrl;
     let { html, finalUrl } = initialRes;
     let $ = cheerio.load(html);
@@ -1057,7 +1113,7 @@ app.get('/api/book-detail', async (req, res) => {
 
     if (catalogUpgradeUrl && catalogUpgradeUrl !== finalUrl) {
       try {
-        const catRes = await fetchWithEncoding(catalogUpgradeUrl, 10000);
+        const catRes = await fetchWithTranslateFallback(catalogUpgradeUrl, 10000);
         if (catRes.html && catRes.html.length > 500) {
           html = catRes.html;
           finalUrl = catRes.finalUrl;
@@ -1067,7 +1123,7 @@ app.get('/api/book-detail', async (req, res) => {
     }
 
     // Extract book title
-    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').replace(/最新章节.*$/, '').replace(/全文阅读.*$/, '').trim() ||
+    const title = $('h1').first().text().replace(/百书屋|看小说网/g, '').replace(/作者[：:].*/g, '').replace(/[《》]/g, '').replace(/最新章节.*$/, '').replace(/全文阅读.*$/, '').replace(/章节目录\s*$/, '').trim() ||
                   $('.book-name, .info h1, .title, meta[property="og:novel:book_name"]').attr('content') ||
                   $('title').text().split(/最新章节|章节列表|章节目录|无弹窗|,|_|-/)[0].replace(/[《》]/g, '').trim() ||
                   '精选作品';
@@ -1129,7 +1185,8 @@ app.get('/api/book-detail', async (req, res) => {
     });
 
     // Baishuwu fallback pagination only if DOM didn't expose multiple pages
-    const bswMatch = finalUrl.match(/baishuwu\.com\/info\/(\d+)/);
+    // (check targetUrl too: via the translate proxy finalUrl is translate.goog)
+    const bswMatch = finalUrl.match(/baishuwu\.com\/info\/(\d+)/) || targetUrl.match(/baishuwu\.com\/info\/(\d+)/);
     if (bswMatch && catalogPageUrls.size <= 1) {
       const bswId = bswMatch[1];
       catalogPageUrls.add(`https://www.baishuwu.com/info/${bswId}/`);
@@ -1145,7 +1202,7 @@ app.get('/api/book-detail', async (req, res) => {
     if (pagesToFetch.length > 1) {
       const otherPages = pagesToFetch.filter(p => p !== finalUrl);
       const settledPages = await Promise.allSettled(
-        otherPages.map(pageUrl => fetchWithEncoding(pageUrl, 8000))
+        otherPages.map(pageUrl => fetchWithTranslateFallback(pageUrl, 8000))
       );
       for (const res of settledPages) {
         if (res.status === 'fulfilled' && res.value.html) {
@@ -1190,6 +1247,9 @@ app.get('/api/book-detail', async (req, res) => {
         if (catalogPageUrls.has(fullUrl)) return;
 
         let chTitle = $a.text().replace(/\s+/g, ' ').trim() || ($a.attr('title') || '').trim();
+        // Strip a trailing update date some sites append to the chapter
+        // title, e.g. 第一站 "第一章 07-20 13:32" -> "第一章".
+        chTitle = chTitle.replace(/\s+\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}\s*$/, '').trim();
         // Handle sites like yunshuzhai where chapter <a> text is empty or placeholder "（）"
         if (!chTitle || chTitle === '（）' || chTitle === '()') {
           if (inContainer && /\/\d+(?:\.html)?$/i.test(fullUrl)) {
@@ -1307,7 +1367,7 @@ app.get('/api/chapter-content', async (req, res) => {
     const preset = TRENDING_BOOKS.find(b => b.id === bookId);
     if (preset && preset.sourceUrl) {
       try {
-        const { html, finalUrl } = await fetchWithEncoding(preset.sourceUrl, 6000);
+        const { html, finalUrl } = await fetchWithTranslateFallback(preset.sourceUrl, 6000);
         const $ = cheerio.load(html);
         const links: string[] = [];
         const catalogContainers = $('#list, .listmain, .centent, dl, .layout-col1');
@@ -1336,7 +1396,7 @@ app.get('/api/chapter-content', async (req, res) => {
   if (cachedChapter) return res.json(cachedChapter);
 
   try {
-    const initialRes = await fetchWithEncoding(targetUrl, 10000);
+    const initialRes = await fetchWithTranslateFallback(targetUrl, 10000);
     let currentUrl = initialRes.finalUrl;
     let currentHtml = initialRes.html;
     let current$ = cheerio.load(currentHtml);
@@ -1501,7 +1561,7 @@ app.get('/api/chapter-content', async (req, res) => {
       visitedUrls.add(nextSubpageUrl);
 
       try {
-        const subRes = await fetchWithEncoding(nextSubpageUrl, 6000);
+        const subRes = await fetchWithTranslateFallback(nextSubpageUrl, 6000);
         currentUrl = subRes.finalUrl;
         currentHtml = subRes.html;
         current$ = cheerio.load(currentHtml);

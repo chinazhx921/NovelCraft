@@ -108,6 +108,11 @@ export function formatNovelText(rawText: string): string {
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .filter((line) => !/^(上章|下章|目录|存书签|上一页|下一页|首页|书架|报错|投票)$/.test(line))
+    // Drop reader-UI controls and page headers that leak into the text
+    // on some sources (e.g. 第一站): "字号 / 背景 / 行距" buttons and
+    // the "书名 · 作者 · 1 / 2" pagination header.
+    .filter((line) => !/^(字号|背景|行距|字体|字体大小|背景颜色|选择背景颜色|选择字体大小)$/.test(line))
+    .filter((line) => !/^.+ · .+ · \d+ \/ \d+$/.test(line))
     .filter((line) => !/^\[IMAGE:\]$/.test(line))
     .map((line) => (line.startsWith('[IMAGE:') ? line : `　　${line}`))
     .join('\n\n');
