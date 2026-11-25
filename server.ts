@@ -1489,10 +1489,12 @@ app.get('/api/chapter-content', async (req, res) => {
       '#content',
       '#chaptercontent',
       '#BookText',
+      '#rtext',
       '.txtnav',
       '.readmain',
       '.chapter_content',
       '.read-content',
+      '.readcontent',
       '.chapter-content',
       '[itemprop="articleBody"]',
       'article',
@@ -1511,8 +1513,17 @@ app.get('/api/chapter-content', async (req, res) => {
     const resolveImages = ($ctx: cheerio.CheerioAPI, scope: cheerio.Cheerio<any>) => {
       scope.find('img').each((_, img) => {
         const $img = $ctx(img);
+        // Lazy-loaded chapter images usually carry the real URL in a
+        // data-* attribute (often relative) with a placeholder in src;
+        // some sources only provide srcset. Take the first usable URL.
+        const srcsetFirst = ($img.attr('srcset') || '').split(',')[0]?.trim().split(/\s+/)[0] || '';
         const rawSrc =
-          $img.attr('data-original') || $img.attr('data-src') || $img.attr('data-lazy-src') || $img.attr('src') || '';
+          $img.attr('data-original') ||
+          $img.attr('data-src') ||
+          $img.attr('data-lazy-src') ||
+          $img.attr('src') ||
+          srcsetFirst ||
+          '';
         if (!rawSrc.trim() || rawSrc.startsWith('data:')) {
           $img.remove();
           return;
@@ -1526,6 +1537,14 @@ app.get('/api/chapter-content', async (req, res) => {
         }
         try {
           $img.attr('src', new URL(rawSrc, currentUrl).toString());
+          // formatNovelText prefers data-* over src, so a relative lazy
+          // URL left behind would shadow the resolved absolute src and
+          // produce a marker the reader cannot render as an image.
+          // Drop the lazy attributes so only the resolved src remains.
+          $img.removeAttr('data-original');
+          $img.removeAttr('data-src');
+          $img.removeAttr('data-lazy-src');
+          $img.removeAttr('srcset');
         } catch {
           $img.remove();
         }
@@ -1570,6 +1589,9 @@ app.get('/api/chapter-content', async (req, res) => {
     // Loop through subpages to stitch complete chapter (up to 15 subpages)
     while (subpageCount < 15) {
       let nextSubpageUrl = '';
+      const stripHostPrefix = (h: string) => h.replace(/^(www|m)\./, '');
+      let currentHost = '';
+      try { currentHost = stripHostPrefix(new URL(currentUrl).hostname); } catch {}
 
       // Primary check: look for href with ${chapterBaseId}_\d+\.html
       current$('a').each((_, el) => {
@@ -1578,11 +1600,19 @@ app.get('/api/chapter-content', async (req, res) => {
         const href = current$(el).attr('href');
         if (!href || href.startsWith('javascript') || href === '#') return;
         if (href.includes('login') || href.includes('register') || href.includes('mybook')) return;
+        // Script-switcher links (繁體站/简体站) are never subpages: some
+        // sources place them next to pagination with URLs that also match
+        // the subpage pattern, and following one appends the traditional
+        // twin of the same chapter (verified 2026-11-25 on 第一站).
+        if (/繁體|繁体|簡體|简体/.test(text)) return;
 
         try {
           const resolved = new URL(href, currentUrl);
           const resolvedUrl = resolved.toString();
           if (visitedUrls.has(resolvedUrl)) return;
+          // Subpages live on the same site; a cross-host match is the
+          // other script edition (e.g. diyizhan.org vs diyizhan.net).
+          if (currentHost && stripHostPrefix(resolved.hostname) !== currentHost) return;
 
           // Condition 1: Pathname matches ${chapterBaseId}_\d+\.html
           if (chapterBaseId && resolved.pathname.includes(chapterBaseId + '_') && resolved.pathname.endsWith('.html')) {
@@ -1609,8 +1639,11 @@ app.get('/api/chapter-content', async (req, res) => {
         const rawMatch = currentHtml.match(subpageRegex);
         if (rawMatch && rawMatch[1]) {
           try {
-            const rawResolved = new URL(rawMatch[1], currentUrl).toString();
-            if (!visitedUrls.has(rawResolved)) {
+            const rawUrl = new URL(rawMatch[1], currentUrl);
+            const rawResolved = rawUrl.toString();
+            // Same cross-host guard as above: the raw match can also hit
+            // the traditional-edition switcher link.
+            if (!visitedUrls.has(rawResolved) && (!currentHost || stripHostPrefix(rawUrl.hostname) === currentHost)) {
               nextSubpageUrl = rawResolved;
             }
           } catch {}
@@ -1630,7 +1663,12 @@ app.get('/api/chapter-content', async (req, res) => {
         current$ = cheerio.load(currentHtml);
 
         const subText = extractContentText(currentHtml);
-        if (subText.length > 30) {
+        // Guard against sources that serve the same page for every _N
+        // (clamped pagination): appending it again would duplicate the
+        // chapter content.
+        const probe = subText.replace(/\s+/g, '').slice(0, 120);
+        const alreadyHave = probe.length >= 40 && fullChapterText.replace(/\s+/g, '').includes(probe);
+        if (subText.length > 30 && !alreadyHave) {
           fullChapterText += '\n\n' + subText;
           subpageCount++;
         } else {

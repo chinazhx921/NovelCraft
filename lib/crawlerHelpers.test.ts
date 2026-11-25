@@ -32,6 +32,18 @@ test('formatNovelText strips mobile and desktop navigation clutter and indents p
   assert.equal(formatted, '　　第一段正文内容。\n\n　　第二段正文内容。');
 });
 
+test('formatNovelText keeps chapter images as markers in position and drops data URIs', () => {
+  const raw =
+    '<p>第一段正文。</p><img src="https://cdn.example.com/p1.jpg"><p>第二段正文。</p>' +
+    '<img data-src="//cdn.example.com/p2.jpg" src="/static/loading.gif">' +
+    '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">';
+  const formatted = formatNovelText(raw);
+  assert.equal(
+    formatted,
+    '　　第一段正文。\n\n[IMAGE:https://cdn.example.com/p1.jpg]\n\n　　第二段正文。\n\n[IMAGE:https://cdn.example.com/p2.jpg]'
+  );
+});
+
 test('extractChapterNumber parses arabic, chinese numerals, and bare numbers', () => {
   assert.equal(extractChapterNumber('第12章 叶家女人'), 12);
   assert.equal(extractChapterNumber('第二百零一章 重逢'), 201);
