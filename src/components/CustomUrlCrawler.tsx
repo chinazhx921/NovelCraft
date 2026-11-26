@@ -7,7 +7,7 @@ interface CustomUrlCrawlerProps {
 }
 
 const SAMPLE_URLS = [
-  { name: '母上攻略全本（489章完整版）', url: 'https://www.baishuwu.com/info/188122/' },
+  { name: '母上攻略（第一站书源）', url: 'https://www.diyizhan.org/index/1531/' },
   { name: '飘天文学斗破苍穹全本源', url: 'https://www.piaotia.com/html/0/706/index.html' },
   { name: '云书斋风流教师（415章全本）', url: 'https://yunshuzhai.com/book/30570/list/' },
 ];
