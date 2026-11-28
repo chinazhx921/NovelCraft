@@ -9,10 +9,6 @@ interface SearchHeaderProps {
 }
 
 const HOT_KEYWORDS = [
-  '母上攻略',
-  '少妇白洁',
-  '少年阿宾',
-  '金鳞岂是池中物',
   '凡人修仙传',
   '斗破苍穹',
   '剑来',
